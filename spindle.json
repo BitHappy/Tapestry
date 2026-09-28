@@ -1,0 +1,12 @@
+{
+  "version": "1.0.0-beta.1",
+  "name": "Tapestry",
+  "identifier": "tapestry",
+  "author": "BitHappy",
+  "github": "https://github.com/BitHappy/Tapestry",
+  "homepage": "https://github.com/BitHappy/Tapestry",
+  "description": "Weave together the full story of your chats — see every branch, fork point, and path in one living map.",
+  "permissions": ["chats", "chat_mutation"],
+  "entry_backend": "dist/backend.js",
+  "entry_frontend": "dist/frontend.js"
+}

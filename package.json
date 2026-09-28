@@ -1,0 +1,14 @@
+{
+  "name": "tapestry",
+  "version": "1.0.0-beta.1",
+  "license": "MIT",
+  "private": true,
+  "devDependencies": {
+    "lumiverse-spindle-types": "latest"
+  },
+  "scripts": {
+    "build:backend": "bun build src/backend.ts --outfile dist/backend.js --target bun",
+    "build:frontend": "bun build src/frontend.ts --outfile dist/frontend.js --target browser",
+    "build": "bun run build:backend && bun run build:frontend"
+  }
+}
