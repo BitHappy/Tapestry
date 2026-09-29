@@ -1,0 +1,6 @@
+# Dependencies (bun install)
+node_modules/
+
+# OS and editor clutter
+.DS_Store
+thumbs.db
