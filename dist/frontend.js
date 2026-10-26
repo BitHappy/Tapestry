@@ -610,9 +610,11 @@ function setup(ctx) {
       done(pick({ content: msg.preview, swipes: msg.swipes }));
     }
   }
-  function showMsgTooltip(anchorEl, msg, opts = {}) {
+  function showMsgTooltip(anchorEl, drawnMsg, opts = {}) {
     greetingView = null;
-    const { onNavigate = null, openedByTouch = false, keepPosition = false, onSwipes = null, onEdits = null, swipeCount = 0, chatId = null, onBranch = null, stepping = false } = opts;
+    const { onNavigate = null, openedByTouch = false, keepPosition = false, onSwipes = null, onEdits = null, swipeCount = 0, onBranch = null, stepping = false, shown = null } = opts;
+    const msg = shown?.msg ?? drawnMsg;
+    const chatId = shown?.chatId ?? opts.chatId ?? null;
     const deskStep = stepping && !openedByTouch && !!deskPin;
     if (!stepping) {
       deskPin = null;
@@ -679,6 +681,7 @@ function setup(ctx) {
         </div>
       </div>
       <div class="ctv-tooltip-preview">${escHtml(text)}</div>
+      ${shown ? `<div class="ctv-tooltip-meta" style="color:#f5b84d">✎ Your branch's version — edited after branching</div>` : ""}
       ${ts ? `<div class="ctv-tooltip-meta">${ts}</div>` : ""}
       ${hintText ? `<div class="ctv-tooltip-hint">${hintText}</div>` : ""}
       ${actions}
@@ -690,7 +693,7 @@ function setup(ctx) {
       requestFullText(chatId, msg.id, (entry) => {
         if (hoverAnchorEl !== anchorEl || !tooltip.classList.contains("expanded"))
           return;
-        if (anchorEl?._msg && anchorEl._msg !== msg)
+        if (anchorEl?._msg && anchorEl._msg !== drawnMsg)
           return;
         const pv = tooltip.querySelector(".ctv-tooltip-preview");
         if (pv && entry.content)
@@ -855,17 +858,32 @@ function setup(ctx) {
   }
   function nodeTooltipOpts(anchorEl, node, msg, extra = {}) {
     const isMultiSwipe = (msg.swipeCount ?? 1) > 1 && !!msg.swipes && msg.swipes.length > 1;
-    const lastIdx = node.messages.length ? node.messages[node.messages.length - 1].index : msg.index;
+    const mine = activeCopyOf(node, msg);
+    const from = mine ? findNodeByChat(mine.chatId) : node;
+    const lastIdx = from.messages.length ? from.messages[from.messages.length - 1].index : msg.index;
     return {
-      onNavigate: () => navigateToMessage(node.chatId, msg.id, msg.index),
+      onNavigate: mine ? () => navigateToMessage(mine.chatId, mine.copy.id, msg.index) : () => navigateToMessage(node.chatId, msg.id, msg.index),
       openedByTouch: lastPointerType === "touch",
       onSwipes: msg.greetingVariants ? () => showGreetingTooltip(anchorEl, node, msg) : isMultiSwipe ? () => showSwipeTooltip(anchorEl, node, msg) : null,
       onEdits: msg.editedIn?.length ? () => showEditsTooltip(anchorEl, node, msg) : null,
       swipeCount: isMultiSwipe ? msg.swipes.length : 0,
       chatId: node.chatId,
-      onBranch: msg.index === lastIdx ? null : () => branchOnSwipe(node.chatId, msg, msg.swipeId ?? 0),
+      onBranch: msg.index === lastIdx ? null : mine ? () => branchOnSwipe(mine.chatId, mine.copy, mine.copy.swipeId ?? 0) : () => branchOnSwipe(node.chatId, msg, msg.swipeId ?? 0),
+      shown: mine?.edited ? {
+        chatId: mine.chatId,
+        msg: { ...msg, id: mine.copy.id, preview: mine.edited.text, truncated: mine.edited.truncated, swipes: undefined, swipeCount: 1 }
+      } : null,
       ...extra
     };
+  }
+  function activeCopyOf(node, msg) {
+    if (!activeChatId || activeChatId === node.chatId)
+      return null;
+    const copy = findNodeByChat(activeChatId)?.messages?.[msg.index];
+    if (!copy?.id || laneOwnerOf(activeChatId, msg.index) !== node.chatId)
+      return null;
+    const edited = msg.editedIn?.find((g) => g.chats.some((c) => c.chatId === activeChatId)) ?? null;
+    return { chatId: activeChatId, copy, edited };
   }
   function laneOwnerOf(chatId, index) {
     let n = findNodeByChat(chatId);
@@ -1211,7 +1229,7 @@ function setup(ctx) {
     const rowHtml = (k) => {
       const g = groups[k - 1];
       const dests = k === 0 ? [`<button class="ctv-swipe-act go" data-row="0">→ ${escHtml(truncate(branchLabel(node.chatName, node.branchPath), 22))}</button>`] : g.chats.map((c) => `<button class="ctv-swipe-act go" data-row="${k}" data-dest-chat="${escHtml(c.chatId)}" data-dest-msg="${escHtml(c.messageId)}">→ ${escHtml(truncate(branchLabel(c.name, c.branchPath), 22))}</button>`);
-      const title = k === 0 ? "On the map" : `Edited in ${g.chats.length} branch${g.chats.length === 1 ? "" : "es"}`;
+      const title = k === 0 ? "Original" : `Edited in ${g.chats.length} branch${g.chats.length === 1 ? "" : "es"}`;
       return `
         <div class="ctv-swipe-row${k === currentRow ? " active" : ""}" data-row="${k}">
           <div class="ctv-swipe-head" title="Click to expand the text">
@@ -1229,7 +1247,7 @@ function setup(ctx) {
         <div class="ctv-tooltip-role">${label} · msg ${msg.index + 1} · ✎ ${groups.length} edited</div>
       </div>
       <div class="ctv-swipe-list">${texts.map((_, k) => rowHtml(k)).join("")}</div>
-      <div class="ctv-tooltip-hint">Highlights show what changed from the map's version · → opens that branch</div>
+      <div class="ctv-tooltip-hint">Highlights show what changed from the original · → opens that branch</div>
     `;
     const rowEls = Array.from(tooltip.querySelectorAll(".ctv-swipe-row"));
     const paint = (k) => {
@@ -2415,7 +2433,7 @@ function setup(ctx) {
             if (lastPointerType === "touch")
               return;
             hideMsgTooltip();
-            navigateToMessage(node.chatId, msg.id, msg.index);
+            nodeTooltipOpts(circle, node, msg).onNavigate();
           });
           svg.appendChild(circle);
           if (branchSlide)

@@ -737,9 +737,13 @@ export function setup(ctx: SpindleFrontendContext) {
 
   // Show a message tooltip glued to its node: a short preview first, then after
   // a short hold the full text in a scrollable box you can move onto and read.
-  function showMsgTooltip(anchorEl, msg, opts: any = {}) {
+  // `opts.shown` swaps in another version of the message to display (and copy):
+  // your own chat's edited copy of a node on the highlighted path.
+  function showMsgTooltip(anchorEl, drawnMsg, opts: any = {}) {
     greetingView = null
-    const { onNavigate = null, openedByTouch = false, keepPosition = false, onSwipes = null, onEdits = null, swipeCount = 0, chatId = null, onBranch = null, stepping = false } = opts
+    const { onNavigate = null, openedByTouch = false, keepPosition = false, onSwipes = null, onEdits = null, swipeCount = 0, onBranch = null, stepping = false, shown = null } = opts
+    const msg = shown?.msg ?? drawnMsg
+    const chatId = shown?.chatId ?? opts.chatId ?? null
     // Desktop ◀ ▶ / arrow-key stepping: open straight into the full view at a
     // frozen spot (deskPin) instead of re-anchoring beside the new node.
     const deskStep = stepping && !openedByTouch && !!deskPin
@@ -837,6 +841,7 @@ export function setup(ctx: SpindleFrontendContext) {
         </div>
       </div>
       <div class="ctv-tooltip-preview">${escHtml(text)}</div>
+      ${shown ? `<div class="ctv-tooltip-meta" style="color:#f5b84d">✎ Your branch's version — edited after branching</div>` : ''}
       ${ts ? `<div class="ctv-tooltip-meta">${ts}</div>` : ''}
       ${hintText ? `<div class="ctv-tooltip-hint">${hintText}</div>` : ''}
       ${actions}
@@ -857,7 +862,7 @@ export function setup(ctx: SpindleFrontendContext) {
       if (!msg.truncated) return
       requestFullText(chatId, msg.id, (entry) => {
         if (hoverAnchorEl !== anchorEl || !tooltip.classList.contains('expanded')) return
-        if ((anchorEl as any)?._msg && (anchorEl as any)._msg !== msg) return
+        if ((anchorEl as any)?._msg && (anchorEl as any)._msg !== drawnMsg) return
         const pv = tooltip.querySelector('.ctv-tooltip-preview')
         if (pv && entry.content) pv.textContent = entry.content
       })
@@ -1047,20 +1052,46 @@ export function setup(ctx: SpindleFrontendContext) {
   // Options for a node's message preview — shared by hover/tap, the ◀ ▶ stepper
   // and the swipe list's "‹ Back", so they all offer the same actions. No "new
   // branch" on a branch's last message: branching there would just clone the chat.
+  //
+  // A node on the highlighted path but drawn on an ancestor's lane is, for you,
+  // your own chat's copy of that message — so jumping and branching act on that
+  // copy (you stay in your chat), and if you edited it after branching, the
+  // preview shows your version.
   function nodeTooltipOpts(anchorEl, node, msg, extra: any = {}) {
     const isMultiSwipe = (msg.swipeCount ?? 1) > 1 && !!msg.swipes && msg.swipes.length > 1
-    const lastIdx = node.messages.length ? node.messages[node.messages.length - 1].index : msg.index
+    const mine = activeCopyOf(node, msg)
+    const from = mine ? findNodeByChat(mine.chatId) : node
+    const lastIdx = from.messages.length ? from.messages[from.messages.length - 1].index : msg.index
     return {
-      onNavigate: () => navigateToMessage(node.chatId, msg.id, msg.index),
+      onNavigate: mine
+        ? () => navigateToMessage(mine.chatId, mine.copy.id, msg.index)
+        : () => navigateToMessage(node.chatId, msg.id, msg.index),
       openedByTouch: lastPointerType === 'touch',
       onSwipes: msg.greetingVariants ? () => showGreetingTooltip(anchorEl, node, msg)
         : isMultiSwipe ? () => showSwipeTooltip(anchorEl, node, msg) : null,
       onEdits: msg.editedIn?.length ? () => showEditsTooltip(anchorEl, node, msg) : null,
       swipeCount: isMultiSwipe ? msg.swipes.length : 0,
       chatId: node.chatId,
-      onBranch: msg.index === lastIdx ? null : () => branchOnSwipe(node.chatId, msg, msg.swipeId ?? 0),
+      onBranch: msg.index === lastIdx ? null
+        : mine ? () => branchOnSwipe(mine.chatId, mine.copy, mine.copy.swipeId ?? 0)
+        : () => branchOnSwipe(node.chatId, msg, msg.swipeId ?? 0),
+      shown: mine?.edited ? {
+        chatId: mine.chatId,
+        msg: { ...msg, id: mine.copy.id, preview: mine.edited.text, truncated: mine.edited.truncated, swipes: undefined, swipeCount: 1 },
+      } : null,
       ...extra,
     }
+  }
+
+  // Your chat's own copy of a message drawn on an ancestor's lane, when your
+  // chat's history runs through it (the highlighted path); with `edited`, the
+  // edited version your copy shows. Null off your path or on your own lane.
+  function activeCopyOf(node, msg) {
+    if (!activeChatId || activeChatId === node.chatId) return null
+    const copy = findNodeByChat(activeChatId)?.messages?.[msg.index]
+    if (!copy?.id || laneOwnerOf(activeChatId, msg.index) !== node.chatId) return null
+    const edited = msg.editedIn?.find(g => g.chats.some(c => c.chatId === activeChatId)) ?? null
+    return { chatId: activeChatId, copy, edited }
   }
 
   // The lane that draws message `index` of `chatId`'s history: the chat itself
@@ -1437,10 +1468,10 @@ export function setup(ctx: SpindleFrontendContext) {
     return out.join('')
   }
 
-  // A message edited in another branch after branching: the map draws this
-  // lane's version, while those branches carry their own. Lists the map's
-  // version first, then each edited version with its changes highlighted and
-  // the branches that show it. Laid out like the swipe list, but these live in
+  // A message edited in another branch after branching. This lane holds the
+  // original; those branches carry their own edited copies. Lists the original
+  // first, then each edited version with its changes highlighted and the
+  // branches that show it. Laid out like the swipe list, but these live in
   // other chats — so the actions jump there rather than select anything here.
   function showEditsTooltip(anchorEl, node, msg) {
     greetingView = null
@@ -1464,7 +1495,7 @@ export function setup(ctx: SpindleFrontendContext) {
 
     const label = msg.role === 'user' ? 'User' : msg.role === 'assistant' ? 'AI' : 'System'
     const groups = msg.editedIn ?? []
-    // Row 0 is the map's version, row k the (k-1)th edited one. Texts start as
+    // Row 0 is the original, row k the (k-1)th edited one. Texts start as
     // the capped previews and are swapped for the full text as it arrives.
     const texts: string[] = [msg.preview || '', ...groups.map(g => g.text || '')]
 
@@ -1483,7 +1514,7 @@ export function setup(ctx: SpindleFrontendContext) {
       const dests = k === 0
         ? [`<button class="ctv-swipe-act go" data-row="0">→ ${escHtml(truncate(branchLabel(node.chatName, node.branchPath), 22))}</button>`]
         : g.chats.map(c => `<button class="ctv-swipe-act go" data-row="${k}" data-dest-chat="${escHtml(c.chatId)}" data-dest-msg="${escHtml(c.messageId)}">→ ${escHtml(truncate(branchLabel(c.name, c.branchPath), 22))}</button>`)
-      const title = k === 0 ? 'On the map' : `Edited in ${g.chats.length} branch${g.chats.length === 1 ? '' : 'es'}`
+      const title = k === 0 ? 'Original' : `Edited in ${g.chats.length} branch${g.chats.length === 1 ? '' : 'es'}`
       return `
         <div class="ctv-swipe-row${k === currentRow ? ' active' : ''}" data-row="${k}">
           <div class="ctv-swipe-head" title="Click to expand the text">
@@ -1502,7 +1533,7 @@ export function setup(ctx: SpindleFrontendContext) {
         <div class="ctv-tooltip-role">${label} · msg ${msg.index + 1} · ✎ ${groups.length} edited</div>
       </div>
       <div class="ctv-swipe-list">${texts.map((_, k) => rowHtml(k)).join('')}</div>
-      <div class="ctv-tooltip-hint">Highlights show what changed from the map's version · → opens that branch</div>
+      <div class="ctv-tooltip-hint">Highlights show what changed from the original · → opens that branch</div>
     `
     const rowEls = Array.from(tooltip.querySelectorAll('.ctv-swipe-row')) as HTMLElement[]
     // Edited rows always show their changes; the map's row is plain text.
@@ -2849,7 +2880,7 @@ export function setup(ctx: SpindleFrontendContext) {
             // the user can read before committing. A real mouse click still jumps.
             if (lastPointerType === 'touch') return
             hideMsgTooltip()
-            navigateToMessage(node.chatId, msg.id, msg.index)
+            nodeTooltipOpts(circle, node, msg).onNavigate()
           })
           svg.appendChild(circle)
 
