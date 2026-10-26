@@ -648,25 +648,117 @@ for (const ev of ['MESSAGE_SENT', 'MESSAGE_EDITED', 'MESSAGE_DELETED', 'MESSAGE_
 }
 spindle.on('CHAT_DELETED', (p: any) => invalidateChat(p?.id));
 
+// Every chat of a character. The host caps `limit` at 200 per call, so page
+// until they're exhausted. Taking only the first page would not just hide the
+// overflow: any branch whose PARENT fell off the end loses its link and gets
+// drawn as a stray root, so a partial fetch corrupts the shape of the tree.
+async function listCharacterChats(characterId: string, userId: string): Promise<any[]> {
+  const all: any[] = [];
+  for (let page = 0; page < 50; page++) {
+    const { data, total } = await spindle.chats.list({
+      characterId, limit: 200, offset: page * 200, userId,
+    });
+    if (!data?.length) break;
+    all.push(...data);
+    if (typeof total === 'number' ? all.length >= total : data.length < 200) break;
+  }
+  return all;
+}
+
+// ── Search ──────────────────────────────────────────────────────────────────
+//
+// Full-text search over a character's chats, for the search bar. The tree
+// payload only carries capped previews (and none for inherited copies), so the
+// search runs here, over the cached raw messages.
+//
+// The frontend says which messages to look at: for each chat, the index its own
+// section starts at (everything before is a copy the map draws on an ancestor's
+// lane — searching it too would report every shared message once per branch),
+// plus the ids of inherited copies that differ from the drawn version, which
+// are worth finding in their own right. A message matches when every term
+// appears in it (case-insensitive) — in its active text, or with `swipes`, in
+// any of its swipes.
+const SEARCH_MAX_HITS = 500;
+
+interface SearchHit {
+  chatId: string
+  index: number
+  messageId: string
+  role: string
+  active: boolean       // the active text matches
+  swipes: number[]      // other swipes that match
+  snippet: string       // a window of text around the first match
+}
+
+function snippetAround(text: string, terms: string[]): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  const lower = flat.toLowerCase();
+  let at = -1;
+  for (const t of terms) {
+    const i = lower.indexOf(t);
+    if (i !== -1 && (at === -1 || i < at)) at = i;
+  }
+  if (at === -1) at = 0;
+  let start = Math.max(0, at - 60);
+  if (start > 0) {
+    const space = flat.indexOf(' ', start);
+    if (space !== -1 && space < at) start = space + 1;
+  }
+  const end = Math.min(flat.length, at + 180);
+  return (start > 0 ? '…' : '') + flat.slice(start, end) + (end < flat.length ? '…' : '');
+}
+
+async function handleSearch(payload: any, userId: string) {
+  const callId = payload.callId;
+  const fail = (error: string) => spindle.sendToFrontend({ type: 'search_error', callId, error }, userId);
+  const terms: string[] = Array.isArray(payload.terms)
+    ? payload.terms.filter((t: unknown) => typeof t === 'string' && t.trim())
+      .map((t: string) => t.toLowerCase().slice(0, 200)).slice(0, 12)
+    : [];
+  if (!terms.length) { fail('Nothing to search for'); return; }
+
+  const chat = await spindle.chats.get(payload.chatId, userId);
+  if (!chat) { fail('Chat not found'); return; }
+  // Only this user's chats of this character are searched, whatever was asked.
+  const allowed = new Set((await listCharacterChats(chat.character_id, userId)).map(c => c.id));
+  const scope = payload.scope && typeof payload.scope === 'object' ? payload.scope : {};
+  const extra = new Set(Array.isArray(payload.extraIds) ? payload.extraIds.filter((x: unknown) => typeof x === 'string') : []);
+
+  const hits: SearchHit[] = [];
+  let truncated = false;
+  const matches = (text: string) => {
+    const lower = (text || '').toLowerCase();
+    return terms.every(t => lower.includes(t));
+  };
+  for (const [cid, firstRaw] of Object.entries(scope)) {
+    if (!allowed.has(cid)) continue;
+    const first = Number.isInteger(firstRaw) ? (firstRaw as number) : 0;
+    const raws = await getMessagesCached(cid, chat.character_id);
+    for (let i = 0; i < raws.length; i++) {
+      const m = raws[i];
+      if (i < first && !extra.has(m.id)) continue;
+      const active = matches(m.content);
+      const swipes: number[] = [];
+      if (payload.swipes && (m.swipes?.length ?? 0) > 1) {
+        m.swipes!.forEach((s, k) => { if (k !== (m.swipe_id ?? 0) && matches(s)) swipes.push(k); });
+      }
+      if (!active && !swipes.length) continue;
+      const shown = active ? m.content : m.swipes![swipes[0]];
+      hits.push({ chatId: cid, index: i, messageId: m.id, role: m.role, active, swipes, snippet: snippetAround(shown, terms) });
+      if (hits.length >= SEARCH_MAX_HITS) { truncated = true; break; }
+    }
+    if (truncated) break;
+  }
+  spindle.sendToFrontend({ type: 'search_results', callId, hits, truncated }, userId);
+}
+
 // `reqId` is the frontend's request number, echoed on every reply so it can
 // ignore replies to requests it has since superseded.
 async function handleGetTreeData(characterId: string, userId: string, preferChatId: string | null = null, reqId?: number) {
   try {
     spindle.sendToFrontend({ type: 'tree_loading', reqId }, userId);
 
-    // The host caps `limit` at 200 per call, so page until the character's chats
-    // are exhausted. Taking only the first page would not just hide the overflow:
-    // any branch whose PARENT fell off the end loses its link and gets drawn as a
-    // stray root, so a partial fetch corrupts the shape of the tree that remains.
-    const allChats: any[] = [];
-    for (let page = 0; page < 50; page++) {
-      const { data, total } = await spindle.chats.list({
-        characterId, limit: 200, offset: page * 200, userId,
-      });
-      if (!data?.length) break;
-      allChats.push(...data);
-      if (typeof total === 'number' ? allChats.length >= total : data.length < 200) break;
-    }
+    const allChats = await listCharacterChats(characterId, userId);
 
     if (!allChats.length) {
       spindle.sendToFrontend({ type: 'tree_data', reqId, characterId, roots: [] }, userId);
@@ -1130,6 +1222,16 @@ spindle.onFrontendMessage(async (payload: any, userId: string) => {
       } catch (err: any) {
         spindle.log.error(`[tapestry] get_full_message error: ${err?.message ?? err}`);
         fail(err?.message ?? 'Failed to load message');
+      }
+      return;
+    }
+
+    if (payload.type === 'search') {
+      try {
+        await handleSearch(payload, userId);
+      } catch (err: any) {
+        spindle.log.error(`[tapestry] search error: ${err?.message ?? err}`);
+        spindle.sendToFrontend({ type: 'search_error', callId: payload.callId, error: err?.message ?? 'Search failed' }, userId);
       }
       return;
     }

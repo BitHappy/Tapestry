@@ -117,7 +117,7 @@ function setup(ctx) {
   ctx.dom.addStyle(`
     .ctv-root { display:flex; flex-direction:column; height:100%; background:var(--lumiverse-bg); color:var(--lumiverse-text); font-family:inherit; overflow:hidden; }
     .ctv-header { display:flex; align-items:flex-start; gap:0; padding:10px 14px; border-bottom:1px solid var(--lumiverse-border); flex-shrink:0; position:relative; }
-    .ctv-header-main { flex:1; display:flex; align-items:center; gap:8px; flex-wrap:wrap; min-width:0; padding-right:66px; }
+    .ctv-header-main { flex:1; display:flex; align-items:center; gap:8px; flex-wrap:wrap; min-width:0; padding-right:98px; }
     /* Top-right action cluster: reload tucked beside the fullscreen button so neither
        steals a row from the legend nor adds height to the header. */
     .ctv-header-actions { position:absolute; top:8px; right:14px; display:flex; align-items:center; gap:6px; }
@@ -194,6 +194,36 @@ function setup(ctx) {
     .ctv-tooltip-swipes.ctv-tooltip-edits:hover { background:rgba(245,184,77,0.85); color:#1a1825; }
     .ctv-edit-badge { fill:#f5b84d; stroke:var(--lumiverse-bg,#13111c); stroke-width:1; pointer-events:none; }
     .ctv-diff-add { background:rgba(91,201,142,0.24); color:inherit; text-decoration:none; border-radius:3px; }
+    /* ── Search ── */
+    .ctv-finder { border-bottom:1px solid var(--lumiverse-border); padding:8px 14px; display:flex; flex-direction:column; gap:6px; flex-shrink:0; }
+    .ctv-finder[hidden] { display:none; }
+    .ctv-find-row, .ctv-find-opts { display:flex; align-items:center; gap:6px; min-width:0; }
+    .ctv-find-input { flex:1; min-width:0; background:var(--lumiverse-fill-subtle); border:1px solid var(--lumiverse-border); border-radius:7px; color:var(--lumiverse-text); font-size:12.5px; padding:5px 9px; outline:none; font-family:inherit; }
+    .ctv-find-input:focus { border-color:var(--lumiverse-primary-040,#6b63c0); }
+    .ctv-find-count { font-size:11px; color:var(--lumiverse-text-dim); white-space:nowrap; min-width:42px; text-align:right; }
+    .ctv-find-opts { flex-wrap:wrap; font-size:11px; color:var(--lumiverse-text-dim); }
+    .ctv-seg { display:inline-flex; border:1px solid var(--lumiverse-border); border-radius:999px; overflow:hidden; }
+    .ctv-seg button { border:0; background:transparent; color:var(--lumiverse-text-dim); font-size:11px; padding:3px 9px; cursor:pointer; font-family:inherit; }
+    .ctv-seg button + button { border-left:1px solid var(--lumiverse-border); }
+    .ctv-seg button.active { background:var(--lumiverse-primary-015); color:var(--lumiverse-primary-text,#a9a0ff); }
+    .ctv-find-check { display:inline-flex; align-items:center; gap:4px; cursor:pointer; user-select:none; }
+    .ctv-find-listtoggle { margin-left:auto; border:0; background:transparent; color:var(--lumiverse-text-dim); font-size:11px; cursor:pointer; font-family:inherit; padding:2px 4px; }
+    .ctv-find-listtoggle:hover { color:var(--lumiverse-text); }
+    .ctv-find-list { max-height:min(220px, 30vh); overflow-y:auto; overscroll-behavior:contain; display:flex; flex-direction:column; gap:4px; }
+    .ctv-find-list[hidden] { display:none; }
+    .ctv-find-item { border:1px solid var(--lumiverse-border); border-radius:7px; padding:5px 8px; background:var(--lumiverse-fill-subtle); cursor:pointer; font-size:11.5px; line-height:1.4; }
+    .ctv-find-item:hover { background:var(--lumiverse-fill); }
+    .ctv-find-item.current { border-color:var(--lumiverse-primary-040,#6b63c0); background:var(--lumiverse-primary-015); }
+    .ctv-find-meta { font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.04em; color:var(--lumiverse-text-dim); margin-bottom:2px; }
+    .ctv-find-snip { color:var(--lumiverse-text); word-break:break-word; }
+    .ctv-find-note { font-size:11px; color:var(--lumiverse-text-dim); padding:2px 0; }
+    mark.ctv-mark { background:rgba(255,214,102,0.35); color:inherit; border-radius:2px; padding:0 1px; }
+    /* Map while searching: matches ringed, everything else dimmed. CSS beats the
+       nodes' opacity attributes, so nothing needs re-rendering to undo it. */
+    .ctv-svg.ctv-searching .ctv-node:not(.ctv-search-hit), .ctv-svg.ctv-searching .ctv-pill:not(.ctv-search-hit) { opacity:0.22; }
+    .ctv-svg.ctv-searching .ctv-track, .ctv-svg.ctv-searching .ctv-connector { opacity:0.25; }
+    .ctv-node.ctv-search-hit, .ctv-pill.ctv-search-hit { stroke:#ffd666; stroke-width:2; stroke-opacity:1; }
+    .ctv-node.ctv-search-current, .ctv-pill.ctv-search-current { stroke-width:3; filter:drop-shadow(0 0 5px rgba(255,214,102,0.95)); }
     .ctv-diff-del { background:rgba(232,109,109,0.22); color:inherit; text-decoration:line-through; opacity:0.8; border-radius:3px; }
     /* Swipe view header: a "‹ Back" button returns to the message preview. */
     .ctv-swipe-header { display:flex; align-items:center; gap:8px; margin-bottom:6px; }
@@ -341,6 +371,7 @@ function setup(ctx) {
           <!-- <button class="ctv-ping-btn" title="Ping backend">Ping</button> — debug only -->
         </div>
         <div class="ctv-header-actions">
+          <button class="ctv-reload-btn ctv-search-btn" title="Search messages (all branches)">⌕</button>
           <button class="ctv-reload-btn" title="Force reload tree">↻</button>
           <button class="ctv-expand-btn" title="Open fullscreen view">⛶</button>
         </div>
@@ -362,7 +393,8 @@ function setup(ctx) {
   const zoomInBtn = root.querySelector(".ctv-zoom-in");
   const zoomOutBtn = root.querySelector(".ctv-zoom-out");
   const zoomLabel = root.querySelector(".ctv-zoom-label");
-  const reloadBtn = root.querySelector(".ctv-reload-btn");
+  const reloadBtn = root.querySelector(".ctv-reload-btn:not(.ctv-search-btn)");
+  const searchBtn = root.querySelector(".ctv-search-btn");
   const dbg = (msg) => {
     const ts = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
     debugText.textContent = `${ts} ${msg}`;
@@ -646,6 +678,7 @@ function setup(ctx) {
     const hasPrev = !!onNavigate && !!adjacentNodeCircle(anchorEl, -1);
     const hasNext = !!onNavigate && !!adjacentNodeCircle(anchorEl, 1);
     const label = msg.role === "user" ? "User" : msg.role === "assistant" ? "AI" : "System";
+    const searchNote = searchNoteFor(anchorEl, drawnMsg, shown?.chats ?? []);
     const ts = msg.timestamp ? new Date(msg.timestamp * 1000).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
     const SHORT = 200;
     const isLong = (msg.preview || "").length > SHORT;
@@ -680,7 +713,8 @@ function setup(ctx) {
           ${onNavigate ? copyBtnHtml("Copy message") : ""}
         </div>
       </div>
-      <div class="ctv-tooltip-preview">${escHtml(text)}</div>
+      <div class="ctv-tooltip-preview">${markTerms(text)}</div>
+      ${searchNote}
       ${shown ? `<div class="ctv-tooltip-meta" style="color:#f5b84d">✎ Your branch's version — other branches differ</div>` : ""}
       ${ts ? `<div class="ctv-tooltip-meta">${ts}</div>` : ""}
       ${hintText ? `<div class="ctv-tooltip-hint">${hintText}</div>` : ""}
@@ -697,7 +731,7 @@ function setup(ctx) {
           return;
         const pv = tooltip.querySelector(".ctv-tooltip-preview");
         if (pv && entry.content)
-          pv.textContent = entry.content;
+          pv.innerHTML = markTerms(entry.content);
       });
     };
     if (deskStep && deskPin) {
@@ -871,6 +905,7 @@ function setup(ctx) {
       onBranch: msg.index === lastIdx ? null : mine ? () => branchOnSwipe(mine.chatId, mine.copy, mine.copy.swipeId ?? 0) : () => branchOnSwipe(node.chatId, msg, msg.swipeId ?? 0),
       shown: mine?.edited ? {
         chatId: mine.chatId,
+        chats: mine.edited.chats.map((c) => c.chatId),
         msg: { ...msg, id: mine.copy.id, preview: mine.edited.text, truncated: mine.edited.truncated, swipes: undefined, swipeCount: 1 }
       } : null,
       ...extra
@@ -1085,7 +1120,7 @@ function setup(ctx) {
             ${copyBtnHtml("Copy this swipe", ` data-swipe="${i}"`)}
             ${createHtml}
           </div>
-          <div class="ctv-swipe-text">${escHtml(full)}</div>
+          <div class="ctv-swipe-text">${markTerms(full)}</div>
           ${navHtml ? `<div class="ctv-swipe-actions">${navHtml}</div>` : ""}
         </div>`;
     }).join("");
@@ -1146,7 +1181,7 @@ function setup(ctx) {
         tooltip.querySelectorAll(".ctv-swipe-text").forEach((el, i) => {
           const text = entry.swipes[i];
           if (text)
-            el.textContent = text;
+            el.innerHTML = markTerms(text);
         });
       });
     }
@@ -1600,6 +1635,384 @@ function setup(ctx) {
       return name;
     const base = (name || "").replace(/\s*—\s*Branch at #\d+(?:\s*\(\d+\))?\s*$/, "").trim();
     return `⎇${branchPath}${base ? " · " + base : ""}`;
+  }
+  const search = {
+    open: false,
+    query: "",
+    scope: "all",
+    swipes: true,
+    listOpen: true,
+    terms: [],
+    hits: [],
+    hitKeys: new Map,
+    cursor: -1,
+    truncated: false,
+    status: "",
+    error: "",
+    seq: 0,
+    view: null
+  };
+  const finders = new Set;
+  let searchTimer = null;
+  const searchTerms = () => search.open ? search.terms : [];
+  function parseQuery(q) {
+    const terms = [];
+    const re = /"([^"]+)"|(\S+)/g;
+    let m;
+    while (m = re.exec(q)) {
+      const t = (m[1] ?? m[2]).trim().toLowerCase();
+      if (t && (m[1] || t.length >= 2))
+        terms.push(t);
+    }
+    return [...new Set(terms)];
+  }
+  function markTerms(text, terms = searchTerms()) {
+    const t = String(text ?? "");
+    if (!terms.length)
+      return escHtml(t);
+    const lower = t.toLowerCase();
+    const ranges = [];
+    for (const term of terms) {
+      for (let i = lower.indexOf(term);i !== -1; i = lower.indexOf(term, i + term.length))
+        ranges.push([i, i + term.length]);
+    }
+    if (!ranges.length)
+      return escHtml(t);
+    ranges.sort((a, b) => a[0] - b[0]);
+    let out = "", at = 0;
+    for (const [s, e] of ranges) {
+      if (e <= at)
+        continue;
+      const from = Math.max(s, at);
+      out += escHtml(t.slice(at, from)) + `<mark class="ctv-mark">${escHtml(t.slice(from, e))}</mark>`;
+      at = e;
+    }
+    return out + escHtml(t.slice(at));
+  }
+  function searchScopeOf(rootNodes) {
+    const scope = {};
+    const extraIds = [];
+    const walk = (n) => {
+      scope[n.chatId] = n.parentId === null ? 0 : (n.forkAtIndex ?? 0) + 1;
+      for (const m of n.messages)
+        for (const g of m.editedIn ?? [])
+          for (const c of g.chats)
+            extraIds.push(c.messageId);
+      n.children.forEach(walk);
+    };
+    rootNodes.forEach(walk);
+    return { scope, extraIds };
+  }
+  function scheduleSearch(view = search.view, delay = 250) {
+    if (view)
+      search.view = view;
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(runSearch, delay);
+  }
+  async function runSearch() {
+    const seq = ++search.seq;
+    search.terms = parseQuery(search.query);
+    if (!search.open || !search.terms.length || !roots.length) {
+      setHits([], false);
+      search.status = "";
+      return;
+    }
+    let scope, extraIds = [];
+    if (search.scope === "path") {
+      if (!activeChatId || !findNodeByChat(activeChatId)) {
+        setHits([], false);
+        search.status = "error";
+        search.error = "Open a chat in this tree to search its path";
+        refreshFinders();
+        return;
+      }
+      scope = { [activeChatId]: 0 };
+    } else {
+      const ti = search.scope === "tree" ? search.view?.getTreeIndex() ?? activeTreeIndex : -1;
+      ({ scope, extraIds } = searchScopeOf(ti === -1 ? roots : [roots[ti] ?? roots[0]]));
+    }
+    search.status = "loading";
+    refreshFinders();
+    try {
+      const reply = await askBackend({
+        type: "search",
+        chatId: activeChatId ?? roots[0].chatId,
+        terms: search.terms,
+        swipes: search.swipes,
+        scope,
+        extraIds
+      }, "search_results", "search_error", 15000);
+      if (seq !== search.seq)
+        return;
+      search.status = "";
+      setHits(reply.hits ?? [], !!reply.truncated);
+    } catch (err) {
+      if (seq !== search.seq)
+        return;
+      search.status = "error";
+      search.error = err?.message ?? "Search failed";
+      setHits([], false);
+    }
+  }
+  function setHits(hits, truncated) {
+    const rank = new Map;
+    let r = 0;
+    const walk = (n) => {
+      rank.set(n.chatId, r++);
+      n.children.forEach(walk);
+    };
+    roots.forEach(walk);
+    const byVersion = new Map;
+    const placed = hits.map((h) => {
+      const lane = laneOwnerOf(h.chatId, h.index) ?? h.chatId;
+      const treeIdx = roots.findIndex((rt) => treeContainsChat(rt, lane));
+      return { ...h, lane, treeIdx, key: `${lane}:${h.index}`, otherVersion: lane !== h.chatId && search.scope !== "path", chatIds: [h.chatId] };
+    }).filter((h) => {
+      if (h.treeIdx === -1)
+        return false;
+      if (!h.otherVersion)
+        return true;
+      const same = byVersion.get(`${h.key}\x00${h.snippet}`);
+      if (same) {
+        same.chatIds.push(h.chatId);
+        return false;
+      }
+      byVersion.set(`${h.key}\x00${h.snippet}`, h);
+      return true;
+    });
+    placed.sort((a, b) => a.treeIdx - b.treeIdx || a.index - b.index || (rank.get(a.lane) ?? 0) - (rank.get(b.lane) ?? 0));
+    search.hits = placed;
+    search.truncated = truncated;
+    search.hitKeys = new Map;
+    for (const h of placed) {
+      if (!search.hitKeys.has(h.key))
+        search.hitKeys.set(h.key, []);
+      search.hitKeys.get(h.key).push(h);
+    }
+    search.cursor = -1;
+    refreshFinders();
+    if (roots.length)
+      renderAllPreserveScroll();
+    renderFsRef?.();
+  }
+  function decorateSearch(svg) {
+    if (!search.open || !search.hits.length)
+      return;
+    svg.classList.add("ctv-searching");
+    const current = search.hits[search.cursor]?.key;
+    svg.querySelectorAll("circle.ctv-node").forEach((c) => {
+      const key = `${c.dataset.nodeChat}:${c.dataset.nodeIdx}`;
+      if (search.hitKeys.has(key))
+        c.classList.add("ctv-search-hit");
+      if (key === current)
+        c.classList.add("ctv-search-current");
+    });
+    svg.querySelectorAll(".ctv-pill").forEach((p) => {
+      const keys = (p._pillMsgs ?? []).map((m) => `${p.dataset.pillChat}:${m.index}`);
+      if (keys.some((k) => search.hitKeys.has(k)))
+        p.classList.add("ctv-search-hit");
+      if (current && keys.includes(current))
+        p.classList.add("ctv-search-current");
+    });
+  }
+  const chatLabel = (chatId) => {
+    const n = findNodeByChat(chatId);
+    return n ? branchLabel(n.chatName, n.branchPath) : "";
+  };
+  const hitCountInTree = (i) => search.open ? search.hits.filter((h) => h.treeIdx === i).length : 0;
+  function focusHit(k, view = search.view) {
+    if (!search.hits.length || !view)
+      return;
+    k = (k % search.hits.length + search.hits.length) % search.hits.length;
+    search.cursor = k;
+    const h = search.hits[k];
+    if (view.getTreeIndex() !== h.treeIdx)
+      view.setTreeIndex(h.treeIdx);
+    refreshFinders();
+    const svg = view.canvas.querySelector("svg");
+    if (!svg)
+      return;
+    svg.querySelectorAll(".ctv-search-current").forEach((el) => el.classList.remove("ctv-search-current"));
+    let el = svg.querySelector(`circle.ctv-node[data-node-chat="${CSS.escape(h.lane)}"][data-node-idx="${h.index}"]`);
+    let msg = el?._msg, node = el?._node;
+    if (!el) {
+      for (const p of Array.from(svg.querySelectorAll(`.ctv-pill[data-pill-chat="${CSS.escape(h.lane)}"]`))) {
+        const m = (p._pillMsgs ?? []).find((x) => x.index === h.index);
+        if (m) {
+          el = p;
+          msg = m;
+          node = p._node;
+          p.dataset.nodeChat = h.lane;
+          p.dataset.nodeIdx = String(h.index);
+          p._msg = m;
+          break;
+        }
+      }
+    }
+    if (!el || !msg)
+      return;
+    el.classList.add("ctv-search-current");
+    const cr = view.canvas.getBoundingClientRect(), er = el.getBoundingClientRect();
+    view.canvas.scrollLeft += er.left + er.width / 2 - (cr.left + cr.width / 2);
+    view.canvas.scrollTop += er.top + er.height / 2 - (cr.top + cr.height / 2);
+    showMsgTooltip(el, msg, nodeTooltipOpts(el, node, msg));
+  }
+  function searchNoteFor(anchorEl, msg, shownChats = []) {
+    const lane = anchorEl?.dataset?.nodeChat;
+    const hits = lane ? search.hitKeys.get(`${lane}:${msg.index}`) : null;
+    if (!search.open || !hits?.length)
+      return "";
+    const notes = [];
+    const sw = [...new Set(hits.flatMap((h) => h.swipes ?? []))].sort((a, b) => a - b);
+    if (sw.length)
+      notes.push(`swipe${sw.length > 1 ? "s" : ""} ${sw.map((i) => i + 1).join(", ")}`);
+    const others = hits.filter((h) => h.otherVersion && !h.chatIds.some((c) => shownChats.includes(c))).flatMap((h) => h.chatIds.map(chatLabel));
+    if (others.length)
+      notes.push(`the version in ${others.join(", ")}`);
+    return notes.length ? `<div class="ctv-tooltip-meta" style="color:#ffd666">⌕ Also matches in ${escHtml(notes.join(" and "))}</div>` : "";
+  }
+  function refreshFinders() {
+    finders.forEach((f) => f.refresh());
+  }
+  function openSearch(view) {
+    search.open = true;
+    search.view = view;
+    refreshFinders();
+    view.finder.focus();
+    if (search.query)
+      scheduleSearch(view, 0);
+  }
+  function closeSearch() {
+    search.open = false;
+    clearTimeout(searchTimer);
+    search.seq++;
+    search.terms = [];
+    search.status = "";
+    setHits([], false);
+  }
+  function createFinder(view, beforeEl) {
+    const el = document.createElement("div");
+    el.className = "ctv-finder";
+    el.hidden = true;
+    el.innerHTML = `
+      <div class="ctv-find-row">
+        <input class="ctv-find-input" type="search" placeholder="Search messages…" aria-label="Search messages" spellcheck="false">
+        <span class="ctv-find-count"></span>
+        <button type="button" class="ctv-zoom-btn" data-find="prev" title="Previous match (Shift+Enter)">▴</button>
+        <button type="button" class="ctv-zoom-btn" data-find="next" title="Next match (Enter)">▾</button>
+        <button type="button" class="ctv-zoom-btn" data-find="close" title="Close search (Esc)">✕</button>
+      </div>
+      <div class="ctv-find-opts">
+        <div class="ctv-seg" role="group" aria-label="Search in">
+          <button type="button" data-scope="all" title="Every chat of this character">All trees</button>
+          <button type="button" data-scope="tree" title="Only the tree on screen">This tree</button>
+          <button type="button" data-scope="path" title="Only the chat you're in, from its first message to its last">My path</button>
+        </div>
+        <label class="ctv-find-check" title="Also search alternate swipes"><input type="checkbox" data-find="swipes"> Swipes</label>
+        <button type="button" class="ctv-find-listtoggle" data-find="list"></button>
+      </div>
+      <div class="ctv-find-list"></div>
+    `;
+    beforeEl.parentNode.insertBefore(el, beforeEl);
+    const input = el.querySelector(".ctv-find-input");
+    const count = el.querySelector(".ctv-find-count");
+    const list = el.querySelector(".ctv-find-list");
+    const listBtn = el.querySelector('[data-find="list"]');
+    const swipesBox = el.querySelector('[data-find="swipes"]');
+    input.addEventListener("input", () => {
+      search.query = input.value;
+      scheduleSearch(view);
+    });
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        focusHit(search.cursor + (e.shiftKey ? -1 : 1), view);
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        closeSearch();
+      }
+    });
+    el.addEventListener("click", (e) => {
+      const t = e.target;
+      const scope = t.closest("[data-scope]")?.getAttribute("data-scope");
+      if (scope) {
+        search.scope = scope;
+        scheduleSearch(view, 0);
+        refreshFinders();
+        return;
+      }
+      const act = t.closest("[data-find]")?.getAttribute("data-find");
+      if (act === "prev")
+        focusHit(search.cursor - 1, view);
+      else if (act === "next")
+        focusHit(search.cursor + 1, view);
+      else if (act === "close")
+        closeSearch();
+      else if (act === "list") {
+        search.listOpen = !search.listOpen;
+        refreshFinders();
+      }
+      const item = t.closest(".ctv-find-item");
+      if (item)
+        focusHit(parseInt(item.getAttribute("data-k") || "0", 10), view);
+    });
+    swipesBox.addEventListener("change", () => {
+      search.swipes = swipesBox.checked;
+      scheduleSearch(view, 0);
+    });
+    const LIST_MAX = 200;
+    let listedHits = null;
+    const refresh = () => {
+      el.hidden = !search.open;
+      if (!search.open)
+        return;
+      if (input.value !== search.query)
+        input.value = search.query;
+      swipesBox.checked = search.swipes;
+      el.querySelectorAll("[data-scope]").forEach((b) => b.classList.toggle("active", b.getAttribute("data-scope") === search.scope));
+      const n = search.hits.length;
+      count.textContent = search.status === "loading" ? "…" : !search.terms.length ? "" : n ? `${search.cursor >= 0 ? search.cursor + 1 : "–"} / ${n}${search.truncated ? "+" : ""}` : "0";
+      listBtn.textContent = search.listOpen ? "▾ Hide list" : "▸ Show list";
+      listBtn.hidden = !n;
+      list.hidden = !search.listOpen || !n && search.status !== "error" && !search.terms.length;
+      if (listedHits !== search.hits || search.status === "error") {
+        listedHits = search.hits;
+        if (search.status === "error")
+          list.innerHTML = `<div class="ctv-find-note" style="color:var(--lumiverse-error,#f87171)">${escHtml(search.error)}</div>`;
+        else if (search.terms.length && !n && search.status === "")
+          list.innerHTML = `<div class="ctv-find-note">No matches${search.scope !== "all" ? " — try “All trees”" : ""}</div>`;
+        else
+          list.innerHTML = search.hits.slice(0, LIST_MAX).map((h, k) => {
+            const where = [
+              roots.length > 1 ? `Tree ${h.treeIdx + 1}` : "",
+              (h.otherVersion ? "version in " : "") + h.chatIds.map(chatLabel).join(", "),
+              `msg ${h.index + 1}`,
+              h.role === "user" ? "You" : h.role === "assistant" ? "AI" : "System",
+              !h.active && h.swipes?.length ? `swipe ${h.swipes[0] + 1}` : ""
+            ].filter(Boolean).join(" · ");
+            return `<div class="ctv-find-item" data-k="${k}"><div class="ctv-find-meta">${escHtml(where)}</div><div class="ctv-find-snip">${markTerms(h.snippet)}</div></div>`;
+          }).join("") + (n > LIST_MAX ? `<div class="ctv-find-note">${n - LIST_MAX} more — use ▾ to step through them</div>` : "");
+      }
+      list.querySelectorAll(".ctv-find-item.current").forEach((x) => x.classList.remove("current"));
+      const cur = list.querySelector(`.ctv-find-item[data-k="${search.cursor}"]`);
+      if (cur) {
+        cur.classList.add("current");
+        cur.scrollIntoView({ block: "nearest" });
+      }
+    };
+    const finder = { refresh, focus: () => {
+      input.focus();
+      input.select();
+    }, remove: () => {
+      finders.delete(finder);
+      el.remove();
+    } };
+    finders.add(finder);
+    view.finder = finder;
+    refresh();
+    return finder;
   }
   function assignColors(node, counter, map) {
     map.set(node.chatId, COLORS[counter.n++ % COLORS.length]);
@@ -2476,6 +2889,7 @@ function setup(ctx) {
         }
       }
     }
+    decorateSearch(svg);
     const padX = Math.round((container.clientWidth || 360) / 2);
     const padY = Math.round((container.clientHeight || 600) / 2);
     const wrap = document.createElement("div");
@@ -2776,11 +3190,14 @@ function setup(ctx) {
     roots.forEach((r, i) => {
       const btn = document.createElement("button");
       btn.className = "ctv-tree-btn" + (i === activeTreeIndex ? " active" : "");
-      btn.textContent = `Tree ${i + 1}`;
-      btn.title = r.chatName;
+      const hitsHere = hitCountInTree(i);
+      btn.textContent = `Tree ${i + 1}${hitsHere ? ` · ${hitsHere}` : ""}`;
+      btn.title = r.chatName + (hitsHere ? ` — ${hitsHere} search match${hitsHere === 1 ? "" : "es"}` : "");
       btn.addEventListener("click", () => {
         activeTreeIndex = i;
         renderAll();
+        if (search.open && search.scope === "tree")
+          scheduleSearch(sidebarView, 0);
       });
       treeSelector.appendChild(btn);
     });
@@ -2831,6 +3248,7 @@ function setup(ctx) {
             <span class="ctv-zoom-label" data-fs-zoom-label title="Reset zoom">${Math.round(zoom * 100)}%</span>
             <button class="ctv-zoom-btn" data-fs-zoom-in title="Zoom in (Ctrl+scroll)">+</button>
           </div>
+          <button class="ctv-zoom-btn" data-fs-search title="Search messages (all branches)">⌕</button>
           <button class="ctv-fs-close-btn" title="Close (Esc)">✕</button>
         </div>
         <div class="ctv-fs-canvas-wrap"></div>
@@ -2860,11 +3278,14 @@ function setup(ctx) {
         roots.forEach((rt, i) => {
           const btn = document.createElement("button");
           btn.className = "ctv-tree-btn" + (i === fsTi ? " active" : "");
-          btn.textContent = `Tree ${i + 1}`;
+          const hitsHere = hitCountInTree(i);
+          btn.textContent = `Tree ${i + 1}${hitsHere ? ` · ${hitsHere}` : ""}`;
           btn.title = rt.chatName;
           btn.addEventListener("click", () => {
             fsTi = i;
             renderFs();
+            if (search.open && search.scope === "tree")
+              scheduleSearch(fsView, 0);
           });
           fsSelector.appendChild(btn);
         });
@@ -2898,6 +3319,26 @@ function setup(ctx) {
       renderFs();
     });
     syncFs();
+    const fsView = {
+      canvas: fsCanvas,
+      getTreeIndex: () => fsTi,
+      setTreeIndex: (i) => {
+        fsTi = i;
+        renderFs();
+      }
+    };
+    const fsFinder = createFinder(fsView, fsCanvas);
+    overlay.querySelector("[data-fs-search]").addEventListener("click", () => {
+      if (search.open && search.view === fsView)
+        closeSearch();
+      else
+        openSearch(fsView);
+    });
+    const dropFsFinder = () => {
+      fsFinder.remove();
+      if (search.view === fsView)
+        search.view = sidebarView;
+    };
     renderFsRef = renderFs;
     renderFs();
     requestAnimationFrame(() => overlay.classList.add("ctv-fs-visible"));
@@ -2927,6 +3368,7 @@ function setup(ctx) {
     });
     function close() {
       fsTeardown = null;
+      dropFsFinder();
       tooltip.style.display = "none";
       renderFsRef = null;
       cursorRingFsEl = null;
@@ -2951,6 +3393,7 @@ function setup(ctx) {
     document.addEventListener("keydown", onKey);
     fsTeardown = () => {
       fsTeardown = null;
+      dropFsFinder();
       renderFsRef = null;
       cursorRingFsEl = null;
       cursorPillRingFsEl = null;
@@ -3404,6 +3847,8 @@ function setup(ctx) {
         return;
       }
       renderAllPreserveScroll();
+      if (search.open && search.terms.length)
+        scheduleSearch(undefined, 300);
     }
   });
   let treeDirty = false;
@@ -3488,6 +3933,8 @@ function setup(ctx) {
     const chatId = payload.chatId ?? null;
     activeChatId = chatId;
     dbg(`CHAT_SWITCHED → ${chatId ?? "null"}`);
+    if (search.open && search.scope === "path")
+      scheduleSearch(undefined, 300);
     if (!chatId) {
       roots = [];
       showState("Open a chat to visualise its branch tree");
@@ -3568,6 +4015,21 @@ function setup(ctx) {
       renderAll();
   });
   expandBtn.addEventListener("click", openFullscreen);
+  const sidebarView = {
+    canvas: canvasWrap,
+    getTreeIndex: () => activeTreeIndex,
+    setTreeIndex: (i) => {
+      activeTreeIndex = i;
+      renderAll();
+    }
+  };
+  createFinder(sidebarView, root.querySelector(".ctv-debug-bar"));
+  searchBtn.addEventListener("click", () => {
+    if (search.open)
+      closeSearch();
+    else
+      openSearch(sidebarView);
+  });
   reloadBtn.addEventListener("click", () => {
     dbg("Force reload…");
     roots = [];
@@ -3616,6 +4078,7 @@ function setup(ctx) {
     jumpSeq++;
     hideJumpLoading();
     clearTimeout(autoRefreshTimer);
+    clearTimeout(searchTimer);
     fsTeardown?.();
     tooltip.remove();
     clearTimeout(hoverExpandTimer);
