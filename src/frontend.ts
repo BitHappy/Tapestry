@@ -51,6 +51,9 @@ const NODE_R = 5       // message node radius
 const FORK_R = 7       // fork point node radius
 const PAD = { top: 20, left: 24, right: 24, bottom: 24 }
 
+// A bookmark ribbon: the header button, the preview toggle and the panel title.
+const RIBBON_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M4.5 2.5h7v11l-3.5-2.6-3.5 2.6z"/></svg>'
+
 const COLORS = [
   '#8b7ff0','#4db6e8','#5bc98e','#e8a54d',
   '#e86d6d','#c46de8','#4de8cc','#e8d04d','#e87d4d','#6d9de8',
@@ -169,7 +172,7 @@ export function setup(ctx: SpindleFrontendContext) {
   ctx.dom.addStyle(`
     .ctv-root { display:flex; flex-direction:column; height:100%; background:var(--lumiverse-bg); color:var(--lumiverse-text); font-family:inherit; overflow:hidden; }
     .ctv-header { display:flex; align-items:flex-start; gap:0; padding:10px 14px; border-bottom:1px solid var(--lumiverse-border); flex-shrink:0; position:relative; }
-    .ctv-header-main { flex:1; display:flex; align-items:center; gap:8px; flex-wrap:wrap; min-width:0; padding-right:98px; }
+    .ctv-header-main { flex:1; display:flex; align-items:center; gap:8px; flex-wrap:wrap; min-width:0; padding-right:130px; }
     /* Top-right action cluster: reload tucked beside the fullscreen button so neither
        steals a row from the legend nor adds height to the header. */
     .ctv-header-actions { position:absolute; top:8px; right:14px; display:flex; align-items:center; gap:6px; }
@@ -246,6 +249,27 @@ export function setup(ctx: SpindleFrontendContext) {
     .ctv-tooltip-swipes.ctv-tooltip-edits:hover { background:rgba(245,184,77,0.85); color:#1a1825; }
     .ctv-edit-badge { fill:#f5b84d; stroke:var(--lumiverse-bg,#13111c); stroke-width:1; pointer-events:none; }
     .ctv-diff-add { background:rgba(91,201,142,0.24); color:inherit; text-decoration:none; border-radius:3px; }
+    /* ── Bookmarks ── */
+    .ctv-bookmark-ribbon { fill:#ff8fab; stroke:var(--lumiverse-bg,#13111c); stroke-width:0.8; pointer-events:none; }
+    .ctv-bookmark-btn.on { color:#ff8fab; border-color:rgba(255,143,171,0.6); }
+    .ctv-bookmark-btn.on svg { fill:currentColor; }
+    .ctv-bookmark-btn:disabled { opacity:0.35; cursor:default; }
+    .ctv-bm-row { display:flex; align-items:center; gap:6px; margin:-1px 0 6px; color:#ff8fab; }
+    .ctv-bm-row svg { width:11px; height:11px; flex-shrink:0; fill:currentColor; }
+    .ctv-bm-name { flex:1; min-width:0; background:transparent; border:1px solid transparent; border-radius:5px; color:var(--lumiverse-text); font-size:12px; font-family:inherit; padding:2px 5px; outline:none; }
+    .ctv-bm-name:hover { border-color:var(--lumiverse-border); }
+    .ctv-bm-name:focus { border-color:rgba(255,143,171,0.6); background:var(--lumiverse-fill-subtle); }
+    .ctv-bm-name::placeholder { color:var(--lumiverse-text-dim); font-style:italic; }
+    .ctv-bm-title { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.06em; color:#ff8fab; display:inline-flex; align-items:center; gap:5px; }
+    .ctv-bm-title svg { width:11px; height:11px; fill:currentColor; }
+    .ctv-bm-filter { margin-left:auto; background:var(--lumiverse-fill-subtle); border:1px solid var(--lumiverse-border); border-radius:6px; color:var(--lumiverse-text); font-size:11px; padding:2px 4px; font-family:inherit; }
+    .ctv-bm-head { display:flex; align-items:center; gap:4px; margin-bottom:2px; }
+    .ctv-bm-head .ctv-bm-name { font-weight:600; }
+    .ctv-bm-item.missing { opacity:0.6; cursor:default; }
+    .ctv-bm-go { flex-shrink:0; font-size:10.5px; padding:2px 8px; border-radius:999px; border:1px solid var(--lumiverse-primary-040,#6b63c0); background:var(--lumiverse-primary-015); color:var(--lumiverse-primary-text,#a9a0ff); cursor:pointer; font-family:inherit; white-space:nowrap; }
+    .ctv-bm-go:hover { background:var(--lumiverse-primary-040,#6b63c0); color:#fff; }
+    .ctv-bm-del { flex-shrink:0; width:20px; height:20px; padding:0; border-radius:50%; border:1px solid transparent; background:transparent; color:var(--lumiverse-text-dim); cursor:pointer; font-size:11px; }
+    .ctv-bm-del:hover { border-color:var(--lumiverse-border); color:var(--lumiverse-text); }
     /* ── Search ── */
     .ctv-finder { border-bottom:1px solid var(--lumiverse-border); padding:8px 14px; display:flex; flex-direction:column; gap:6px; flex-shrink:0; }
     .ctv-finder[hidden] { display:none; }
@@ -434,6 +458,7 @@ export function setup(ctx: SpindleFrontendContext) {
         </div>
         <div class="ctv-header-actions">
           <button class="ctv-reload-btn ctv-search-btn" title="Search messages (all branches)">⌕</button>
+          <button class="ctv-reload-btn ctv-bookmarks-btn" title="Bookmarks">${RIBBON_ICON}</button>
           <button class="ctv-reload-btn" title="Force reload tree">↻</button>
           <button class="ctv-expand-btn" title="Open fullscreen view">⛶</button>
         </div>
@@ -456,8 +481,9 @@ export function setup(ctx: SpindleFrontendContext) {
   const zoomInBtn = root.querySelector('.ctv-zoom-in')
   const zoomOutBtn = root.querySelector('.ctv-zoom-out')
   const zoomLabel = root.querySelector('.ctv-zoom-label')
-  const reloadBtn = root.querySelector('.ctv-reload-btn:not(.ctv-search-btn)')
+  const reloadBtn = root.querySelector('.ctv-reload-btn:not(.ctv-search-btn):not(.ctv-bookmarks-btn)')
   const searchBtn = root.querySelector('.ctv-search-btn')
+  const bookmarksBtn = root.querySelector('.ctv-bookmarks-btn')
 
   const dbg = (msg) => {
     const ts = new Date().toLocaleTimeString([], { hour:'2-digit', minute:'2-digit', second:'2-digit' })
@@ -484,6 +510,7 @@ export function setup(ctx: SpindleFrontendContext) {
   let tooltipCopyAction: ((btn: HTMLElement) => void) | null = null  // copies the previewed message's full text
   let tooltipBranchAction: (() => void) | null = null  // "new branch" from the previewed message (null at a branch tip)
   let tooltipTouchMode = false   // whether the open preview is the touch (docked) layout
+  let lastMsgTooltip: any = null // the message preview's arguments, to rebuild it in place (bookmark toggled)
   // Desktop keyboard stepping: armed by clicking a ◀ ▶ button, ended by clicking
   // elsewhere, Esc, or the preview closing. While armed the preview stays pinned
   // (hover-leave doesn't hide it) and ← → step through the tree.
@@ -710,6 +737,8 @@ export function setup(ctx: SpindleFrontendContext) {
   // (with its label) in the swipe list.
   const BRANCH_ICON_PATHS = '<circle cx="4" cy="3.5" r="1.5"/><circle cx="4" cy="12.5" r="1.5"/><circle cx="10.5" cy="5" r="1.5"/><path d="M4 5v6"/><path d="M10.5 6.5c0 3-6.5 2.5-6.5 4.5"/><path d="M13 10.5v4M11 12.5h4"/>'
   const BRANCH_ICON = `<svg viewBox="0 0 16 16" aria-hidden="true">${BRANCH_ICON_PATHS}</svg>`
+  const bookmarkBtnHtml = (on, enabled) =>
+    `<button type="button" class="ctv-icon-btn ctv-bookmark-btn${on ? ' on' : ''}" title="${on ? 'Remove bookmark' : 'Bookmark this spot'}" aria-label="${on ? 'Remove bookmark' : 'Bookmark this spot'}" aria-pressed="${on}"${enabled ? '' : ' disabled'}>${RIBBON_ICON}</button>`
   const branchBtnHtml = () =>
     `<button type="button" class="ctv-icon-btn ctv-branch-btn" title="New branch from this message" aria-label="New branch from this message">${BRANCH_ICON}</button>`
 
@@ -773,7 +802,8 @@ export function setup(ctx: SpindleFrontendContext) {
   // your own chat's edited copy of a node on the highlighted path.
   function showMsgTooltip(anchorEl, drawnMsg, opts: any = {}) {
     greetingView = null
-    const { onNavigate = null, openedByTouch = false, keepPosition = false, onSwipes = null, onEdits = null, swipeCount = 0, onBranch = null, stepping = false, shown = null } = opts
+    const { onNavigate = null, openedByTouch = false, keepPosition = false, onSwipes = null, onEdits = null, swipeCount = 0, onBranch = null, stepping = false, shown = null, bookmarkTarget = null } = opts
+    lastMsgTooltip = { anchorEl, drawnMsg, opts }
     const msg = shown?.msg ?? drawnMsg
     const chatId = shown?.chatId ?? opts.chatId ?? null
     // Desktop ◀ ▶ / arrow-key stepping: open straight into the full view at a
@@ -869,10 +899,12 @@ export function setup(ctx: SpindleFrontendContext) {
         <div class="ctv-tooltip-rolerow-end">
           ${editsBtn}
           ${swipesBtn}
+          ${onNavigate && bookmarkTarget ? bookmarkBtnHtml(!!findBookmark(bookmarkTarget), bm.ready) : ''}
           ${onNavigate && onBranch ? branchBtnHtml() : ''}
           ${onNavigate ? copyBtnHtml('Copy message') : ''}
         </div>
       </div>
+      ${onNavigate && bookmarkTarget ? bookmarkRowsFor(anchorEl, drawnMsg, bookmarkTarget) : ''}
       <div class="ctv-tooltip-preview">${markTerms(text)}</div>
       ${searchNote}
       ${shown ? `<div class="ctv-tooltip-meta" style="color:#f5b84d">✎ Your branch's version — other branches differ</div>` : ''}
@@ -1028,6 +1060,8 @@ export function setup(ctx: SpindleFrontendContext) {
     if (lastPointerType === 'touch') return
     // Keyboard stepping pins the preview until a click elsewhere or Esc.
     if (keyNavActive) return
+    // Typing a bookmark name: stay open even if the pointer wanders off.
+    if (tooltip.contains(document.activeElement)) return
     clearTimeout(hideTimer)
     hideTimer = setTimeout(hideMsgTooltip, HIDE_GRACE_MS)
   }
@@ -1106,6 +1140,9 @@ export function setup(ctx: SpindleFrontendContext) {
       onEdits: msg.editedIn?.length ? () => showEditsTooltip(anchorEl, node, msg) : null,
       swipeCount: isMultiSwipe ? msg.swipes.length : 0,
       chatId: node.chatId,
+      bookmarkTarget: mine
+        ? { chatId: mine.chatId, messageId: mine.copy.id, index: msg.index }
+        : { chatId: node.chatId, messageId: msg.id, index: msg.index },
       onBranch: msg.index === lastIdx ? null
         : mine ? () => branchOnSwipe(mine.chatId, mine.copy, mine.copy.swipeId ?? 0)
         : () => branchOnSwipe(node.chatId, msg, msg.swipeId ?? 0),
@@ -1256,6 +1293,16 @@ export function setup(ctx: SpindleFrontendContext) {
     if (lastPointerType !== 'touch' && pendingExpand) pendingExpand()
   })
   tooltip.addEventListener('mouseleave', scheduleHideTooltip)
+  // Naming a bookmark from its preview.
+  tooltip.addEventListener('input', (e) => {
+    const input = (e.target as HTMLElement).closest('.ctv-bm-name') as HTMLInputElement | null
+    if (input?.dataset.bm) renameBookmark(input.dataset.bm, input.value.trim())
+  })
+  tooltip.addEventListener('keydown', (e) => {
+    if ((e.target as HTMLElement).closest('.ctv-bm-name') && (e.key === 'Enter' || e.key === 'Escape')) {
+      e.preventDefault(); e.stopPropagation(); (e.target as HTMLElement).blur()
+    }
+  })
 
   // Delegated click handling for the tooltip body. The "→ Go to this message"
   // button navigates; on touch (where there's no hover-to-expand) tapping the
@@ -1268,6 +1315,14 @@ export function setup(ctx: SpindleFrontendContext) {
     // we don't hide first — the box morphs from preview → swipe view.
     if (target.closest('.ctv-tooltip-edits')) { tooltipEditsAction?.(); return }
     if (target.closest('.ctv-tooltip-swipes')) { tooltipSwipeAction?.(); return }
+    if (target.closest('.ctv-bookmark-btn') && lastMsgTooltip) {
+      const { anchorEl, drawnMsg, opts } = lastMsgTooltip
+      const added = toggleBookmark(opts.bookmarkTarget)
+      showMsgTooltip(anchorEl, drawnMsg, { ...opts, keepPosition: true, stepping: false })
+      // A new bookmark: straight into naming it (desktop — on touch the keyboard would cover the map).
+      if (added && !tooltipTouchMode) (tooltip.querySelector('.ctv-bm-name') as HTMLInputElement | null)?.focus()
+      return
+    }
     const copyBtn = target.closest('.ctv-tooltip-rolerow .ctv-copy-btn') as HTMLElement | null
     if (copyBtn) { tooltipCopyAction?.(copyBtn); return }
     const branchBtn = target.closest('.ctv-branch-btn') as any
@@ -2093,39 +2148,45 @@ export function setup(ctx: SpindleFrontendContext) {
 
   const hitCountInTree = (i) => search.open ? search.hits.filter(h => h.treeIdx === i).length : 0
 
-  // Move to hit `k`: switch the view to its tree, centre its node (or the pill
-  // holding it) and open its preview.
+  // Move to hit `k`: centre it on the map and open its preview.
   function focusHit(k, view = search.view) {
     if (!search.hits.length || !view) return
     k = ((k % search.hits.length) + search.hits.length) % search.hits.length
     search.cursor = k
     const h = search.hits[k]
-    if (view.getTreeIndex() !== h.treeIdx) view.setTreeIndex(h.treeIdx)
     refreshFinders()
+    const el = focusNode(view, h.lane, h.index, h.treeIdx)
+    view.canvas.querySelectorAll('.ctv-search-current').forEach(x => x.classList.remove('ctv-search-current'))
+    el?.classList.add('ctv-search-current')
+  }
+
+  // Show message `index` of `lane` in a view: switch to its tree, centre its
+  // node (or the pill holding it) and open its preview. Returns the element.
+  function focusNode(view, lane, index, treeIdx) {
+    if (treeIdx !== -1 && view.getTreeIndex() !== treeIdx) view.setTreeIndex(treeIdx)
     const svg = view.canvas.querySelector('svg')
-    if (!svg) return
-    svg.querySelectorAll('.ctv-search-current').forEach(el => el.classList.remove('ctv-search-current'))
-    let el: any = svg.querySelector(`circle.ctv-node[data-node-chat="${CSS.escape(h.lane)}"][data-node-idx="${h.index}"]`)
+    if (!svg) return null
+    let el: any = svg.querySelector(`circle.ctv-node[data-node-chat="${CSS.escape(lane)}"][data-node-idx="${index}"]`)
     let msg = el?._msg, node = el?._node
     if (!el) {
-      for (const p of Array.from(svg.querySelectorAll(`.ctv-pill[data-pill-chat="${CSS.escape(h.lane)}"]`)) as any[]) {
-        const m = (p._pillMsgs ?? []).find(x => x.index === h.index)
+      for (const p of Array.from(svg.querySelectorAll(`.ctv-pill[data-pill-chat="${CSS.escape(lane)}"]`)) as any[]) {
+        const m = (p._pillMsgs ?? []).find(x => x.index === index)
         if (m) {
           el = p; msg = m; node = p._node
           // Point the pill at this message, as the ◀ ▶ stepper does.
-          p.dataset.nodeChat = h.lane; p.dataset.nodeIdx = String(h.index); p._msg = m
+          p.dataset.nodeChat = lane; p.dataset.nodeIdx = String(index); p._msg = m
           break
         }
       }
     }
-    if (!el || !msg) return
-    el.classList.add('ctv-search-current')
+    if (!el || !msg) return null
     // Centre it by scrolling the map itself — scrollIntoView would also scroll
     // whatever the host has around the drawer.
     const cr = view.canvas.getBoundingClientRect(), er = el.getBoundingClientRect()
     view.canvas.scrollLeft += (er.left + er.width / 2) - (cr.left + cr.width / 2)
     view.canvas.scrollTop += (er.top + er.height / 2) - (cr.top + cr.height / 2)
     showMsgTooltip(el, msg, nodeTooltipOpts(el, node, msg))
+    return el
   }
 
   // Under the preview text: where else the search matched in this message —
@@ -2253,6 +2314,259 @@ export function setup(ctx: SpindleFrontendContext) {
     view.finder = finder
     refresh()
     return finder
+  }
+
+  // ── Bookmarks ─────────────────────────────────────────────────────────────
+  // Places in the story to come back to and continue from — a ribbon on the
+  // node, a toggle in its preview, and a panel listing them for the whole
+  // character. Saved per user by the backend. A bookmark names the chat to jump
+  // into: on your highlighted path that's your own chat's copy of the message,
+  // so going back lands you in your branch, not the lane that draws it.
+  const bm = {
+    list: [] as any[],
+    characterId: null as string | null,
+    chatId: null as string | null,   // a chat of that character — what the backend saves against
+    ready: false,        // loaded for currentCharacterId — saving before that would overwrite the stored list
+    open: false,
+    filter: 'all',       // 'all' or a tree index
+    view: null as any,
+  }
+  const bmPanels = new Set<any>()
+  let bmSaveTimer: any = null
+
+  async function loadBookmarks() {
+    flushBookmarks()   // the previous character's pending change
+    const characterId = currentCharacterId
+    const chatId = activeChatId && findNodeByChat(activeChatId) ? activeChatId : roots[0]?.chatId ?? null
+    bm.list = []; bm.ready = false; bm.characterId = characterId; bm.chatId = chatId
+    refreshBookmarks()
+    if (!chatId) return
+    try {
+      const reply = await askBackend({ type: 'bookmarks_get', chatId }, 'bookmarks', 'bookmarks_error')
+      if (bm.characterId !== characterId || reply.characterId !== characterId) return   // switched meanwhile
+      bm.list = reply.bookmarks ?? []
+      bm.ready = true
+      refreshBookmarks()
+    } catch (err: any) {
+      dbg(`bookmarks: ${err?.message ?? err}`)
+    }
+  }
+
+  // Saves shortly after the last change (typing a name saves once, not per key).
+  function saveBookmarks() {
+    if (!bm.ready) return
+    clearTimeout(bmSaveTimer)
+    bmSaveTimer = setTimeout(flushBookmarks, 400)
+  }
+  function flushBookmarks() {
+    if (!bmSaveTimer) return
+    clearTimeout(bmSaveTimer); bmSaveTimer = null
+    askBackend({ type: 'bookmarks_save', chatId: bm.chatId, bookmarks: bm.list }, 'bookmarks', 'bookmarks_error')
+      .catch(err => showActionError(null, "Couldn't save bookmarks", err))
+  }
+
+  // Where a bookmark is on the map now: its chat's message (found again by id
+  // if messages above it were deleted), the lane that draws it, and its tree.
+  // Null when the message (or its chat) is gone.
+  function resolveBookmark(b) {
+    const node = findNodeByChat(b.chatId)
+    if (!node) return null
+    const index = node.messages[b.index]?.id === b.messageId ? b.index : node.messages.findIndex(m => m.id === b.messageId)
+    if (index === -1) return null
+    const lane = laneOwnerOf(b.chatId, index) ?? b.chatId
+    return { lane, index, key: `${lane}:${index}`, treeIdx: roots.findIndex(r => treeContainsChat(r, lane)) }
+  }
+
+  const findBookmark = (t) => t ? bm.list.find(b => b.chatId === t.chatId && b.messageId === t.messageId) ?? null : null
+
+  function toggleBookmark(t) {
+    if (!bm.ready || !t) return null
+    const i = bm.list.findIndex(b => b.chatId === t.chatId && b.messageId === t.messageId)
+    let added = null
+    if (i !== -1) bm.list.splice(i, 1)
+    else {
+      // Not crypto.randomUUID — that needs a secure origin, and Lumiverse is often reached over plain http.
+      added = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 8), chatId: t.chatId, messageId: t.messageId, index: t.index, name: '', createdAt: Date.now() }
+      bm.list.push(added)
+    }
+    saveBookmarks()
+    refreshBookmarks()
+    return added
+  }
+
+  function renameBookmark(id, name) {
+    const b = bm.list.find(x => x.id === id)
+    if (!b || b.name === name) return
+    b.name = name
+    saveBookmarks()
+    bmPanels.forEach(p => p.refresh(id))
+  }
+
+  // Redraw every map's ribbons and every bookmarks panel.
+  function refreshBookmarks() {
+    document.querySelectorAll('svg.ctv-svg').forEach(svg => decorateBookmarks(svg))
+    bmPanels.forEach(p => p.refresh())
+  }
+
+  // Ribbons beside bookmarked nodes (and pills holding one). `follow(el, ref)`
+  // lets renderTree animate a ribbon along with its node.
+  function decorateBookmarks(svg, follow: ((el: Element, ref: Element) => void) | null = null) {
+    svg.querySelectorAll('.ctv-bookmark-ribbon').forEach(el => el.remove())
+    if (!bm.list.length) return
+    const keys = new Set(bm.list.map(resolveBookmark).filter(Boolean).map((r: any) => r.key))
+    if (!keys.size) return
+    const horizontal = svg.dataset.orientation === 'horizontal'
+    const place = (ref, cx, cy, r) => {
+      // A ribbon tab 6 wide and 9 tall, notched at the bottom: left of the node
+      // when lanes run side by side, above it when they're stacked.
+      const x = horizontal ? cx - 3 : cx - r - 9
+      const y = horizontal ? cy - r - 11 : cy - 5
+      const rib = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+      rib.setAttribute('d', `M ${x} ${y} h 6 v 9 l -3 -2.4 l -3 2.4 z`)
+      rib.classList.add('ctv-bookmark-ribbon')
+      svg.appendChild(rib)
+      follow?.(rib, ref)
+    }
+    svg.querySelectorAll('circle.ctv-node').forEach((c: any) => {
+      if (keys.has(`${c.dataset.nodeChat}:${c.dataset.nodeIdx}`)) {
+        place(c, +c.getAttribute('cx'), +c.getAttribute('cy'), +c.getAttribute('r'))
+      }
+    })
+    svg.querySelectorAll('.ctv-pill').forEach((p: any) => {
+      if ((p._pillMsgs ?? []).some(m => keys.has(`${p.dataset.pillChat}:${m.index}`))) {
+        const w = +p.getAttribute('width'), h = +p.getAttribute('height')
+        place(p, +p.getAttribute('x') + w / 2, +p.getAttribute('y') + h / 2, (horizontal ? h : w) / 2)
+      }
+    })
+  }
+
+  // The preview's bookmark controls: the name field for this spot's bookmark
+  // (when it has one) and a note naming bookmarks other chats keep here.
+  function bookmarkRowsFor(anchorEl, drawnMsg, target) {
+    const mine = findBookmark(target)
+    const lane = (anchorEl as HTMLElement)?.dataset?.nodeChat
+    const others = lane ? bm.list.filter(b => b !== mine && resolveBookmark(b)?.key === `${lane}:${drawnMsg.index}`) : []
+    let html = ''
+    if (mine) {
+      html += `<div class="ctv-bm-row">${RIBBON_ICON}<input class="ctv-bm-name" data-bm="${escHtml(mine.id)}" value="${escHtml(mine.name)}" placeholder="Name this bookmark (optional)" maxlength="120" spellcheck="false"></div>`
+    }
+    if (others.length) {
+      const names = others.map(b => (b.name ? `“${b.name}” ` : '') + `in ${chatLabel(b.chatId)}`)
+      html += `<div class="ctv-tooltip-meta" style="color:#ff8fab">Also bookmarked ${escHtml(names.join(', '))}</div>`
+    }
+    return html
+  }
+
+  function openBookmarks(view) {
+    bm.open = true
+    bm.view = view
+    bmPanels.forEach(p => p.refresh())
+  }
+
+  function closeBookmarks() {
+    bm.open = false
+    bmPanels.forEach(p => p.refresh())
+  }
+
+  // The bookmarks panel for one view (sidebar or fullscreen), before `beforeEl`.
+  function createBookmarkPanel(view, beforeEl) {
+    const el = document.createElement('div')
+    el.className = 'ctv-finder ctv-bm-panel'
+    el.hidden = true
+    el.innerHTML = `
+      <div class="ctv-find-row">
+        <span class="ctv-bm-title">${RIBBON_ICON}Bookmarks</span>
+        <select class="ctv-bm-filter" aria-label="Show bookmarks from"></select>
+        <button type="button" class="ctv-zoom-btn" data-bm-act="close" title="Close bookmarks">✕</button>
+      </div>
+      <div class="ctv-find-list"></div>
+    `
+    beforeEl.parentNode.insertBefore(el, beforeEl)
+    const filter = el.querySelector('.ctv-bm-filter') as HTMLSelectElement
+    const list = el.querySelector('.ctv-find-list') as HTMLElement
+
+    filter.addEventListener('change', () => { bm.filter = filter.value; bmPanels.forEach(p => p.refresh()) })
+    el.addEventListener('click', (e) => {
+      const t = e.target as HTMLElement
+      if (t.closest('[data-bm-act="close"]')) { closeBookmarks(); return }
+      const item = t.closest('.ctv-bm-item') as HTMLElement | null
+      if (!item) return
+      const b = bm.list.find(x => x.id === item.dataset.id)
+      if (!b) return
+      if (t.closest('.ctv-bm-del')) {
+        bm.list.splice(bm.list.indexOf(b), 1)
+        saveBookmarks(); refreshBookmarks()
+        return
+      }
+      const at = resolveBookmark(b)
+      if (t.closest('.ctv-bm-go')) {
+        if (!at) return
+        hideMsgTooltip()
+        navigateToMessage(b.chatId, findNodeByChat(b.chatId)?.messages[at.index]?.id ?? b.messageId, at.index)
+        return
+      }
+      if (t.closest('.ctv-bm-name')) return
+      if (at) focusNode(view, at.lane, at.index, at.treeIdx)
+    })
+    el.addEventListener('input', (e) => {
+      const input = (e.target as HTMLElement).closest('.ctv-bm-name') as HTMLInputElement | null
+      const id = input?.closest('.ctv-bm-item')?.getAttribute('data-id')
+      if (input && id) renameBookmark(id, input.value.trim())
+    })
+    el.addEventListener('keydown', (e) => {
+      if ((e.target as HTMLElement).closest('.ctv-bm-name') && (e.key === 'Enter' || e.key === 'Escape')) {
+        e.preventDefault(); e.stopPropagation(); (e.target as HTMLElement).blur()
+      }
+    })
+
+    // `skipId`: a bookmark being renamed here — rebuilding would steal its focus.
+    const refresh = (skipId = null) => {
+      el.hidden = !bm.open
+      if (!bm.open) return
+      const trees = roots.length
+      filter.hidden = trees < 2
+      const opts = ['<option value="all">All trees</option>', ...roots.map((_, i) => `<option value="${i}">Tree ${i + 1}</option>`)].join('')
+      if (filter.innerHTML !== opts) filter.innerHTML = opts
+      if (bm.filter !== 'all' && +bm.filter >= trees) bm.filter = 'all'
+      filter.value = bm.filter
+      if (skipId && list.contains(document.activeElement)) return
+      const rows = bm.list.map(b => ({ b, at: resolveBookmark(b) }))
+        .filter(({ at }) => bm.filter === 'all' || (at && at.treeIdx === +bm.filter))
+        .sort((x, y) => (x.at ? 0 : 1) - (y.at ? 0 : 1)
+          || (x.at?.treeIdx ?? 0) - (y.at?.treeIdx ?? 0) || (x.at?.index ?? 0) - (y.at?.index ?? 0))
+      if (!bm.ready) { list.innerHTML = `<div class="ctv-find-note">Loading bookmarks…</div>`; return }
+      if (!rows.length) {
+        list.innerHTML = `<div class="ctv-find-note">${bm.list.length ? 'No bookmarks in this tree.' : 'No bookmarks yet — use the ribbon button in a message’s preview to add one.'}</div>`
+        return
+      }
+      list.innerHTML = rows.map(({ b, at }) => {
+        const msg = at ? findNodeByChat(at.lane)?.messages[at.index] : null
+        // The text this bookmark's chat shows there — its own version if it differs.
+        const version = msg?.editedIn?.find(g => g.chats.some(c => c.chatId === b.chatId))
+        const text = (version?.text ?? msg?.preview ?? '').replace(/\s+/g, ' ').trim()
+        const where = at ? [
+          trees > 1 ? `Tree ${at.treeIdx + 1}` : '',
+          chatLabel(b.chatId),
+          `msg ${at.index + 1}`,
+          msg ? (msg.role === 'user' ? 'You' : msg.role === 'assistant' ? 'AI' : 'System') : '',
+        ].filter(Boolean).join(' · ') : 'This message no longer exists'
+        return `
+          <div class="ctv-find-item ctv-bm-item${at ? '' : ' missing'}" data-id="${escHtml(b.id)}" title="${at ? 'Show on the map' : ''}">
+            <div class="ctv-bm-head">
+              <input class="ctv-bm-name" value="${escHtml(b.name)}" placeholder="Unnamed bookmark" maxlength="120" spellcheck="false" aria-label="Bookmark name">
+              ${at ? `<button type="button" class="ctv-bm-go" title="Open this chat at this message">→ Go</button>` : ''}
+              <button type="button" class="ctv-bm-del" title="Remove bookmark" aria-label="Remove bookmark">✕</button>
+            </div>
+            <div class="ctv-find-meta">${escHtml(where)}</div>
+            ${text ? `<div class="ctv-find-snip">${escHtml(truncate(text, 160))}</div>` : ''}
+          </div>`
+      }).join('')
+    }
+    const panel = { refresh, remove: () => { bmPanels.delete(panel); el.remove() } }
+    bmPanels.add(panel)
+    view.bmPanel = panel
+    refresh()
+    return panel
   }
 
   // ── Layout helpers ────────────────────────────────────────────────────────
@@ -3297,7 +3611,12 @@ export function setup(ctx: SpindleFrontendContext) {
       }
     }
 
+    svg.dataset.orientation = orientation
     decorateSearch(svg)
+    decorateBookmarks(svg, (el, ref) => {
+      if (slideEls.includes(ref)) slideEls.push(el)
+      else if (fadeinEls.includes(ref)) fadeinEls.push(el)
+    })
 
     // Centering wrapper. flex-shrink:0 on the SVG keeps flexbox from squishing it,
     // and justify/align-center keep the tree centred within the wrap.
@@ -3722,6 +4041,7 @@ export function setup(ctx: SpindleFrontendContext) {
             <button class="ctv-zoom-btn" data-fs-zoom-in title="Zoom in (Ctrl+scroll)">+</button>
           </div>
           <button class="ctv-zoom-btn" data-fs-search title="Search messages (all branches)">⌕</button>
+          <button class="ctv-zoom-btn" data-fs-bookmarks title="Bookmarks">${RIBBON_ICON}</button>
           <button class="ctv-fs-close-btn" title="Close (Esc)">✕</button>
         </div>
         <div class="ctv-fs-canvas-wrap"></div>
@@ -3780,13 +4100,19 @@ export function setup(ctx: SpindleFrontendContext) {
       setTreeIndex: (i) => { fsTi = i; renderFs() },
     }
     const fsFinder = createFinder(fsView, fsCanvas)
+    const fsBmPanel = createBookmarkPanel(fsView, fsCanvas)
+    overlay.querySelector('[data-fs-bookmarks]').addEventListener('click', () => {
+      if (bm.open && bm.view === fsView) closeBookmarks(); else openBookmarks(fsView)
+    })
     overlay.querySelector('[data-fs-search]').addEventListener('click', () => {
       if (search.open && search.view === fsView) closeSearch(); else openSearch(fsView)
     })
     // The fullscreen bar goes with the overlay; the sidebar's takes over.
     const dropFsFinder = () => {
       fsFinder.remove()
+      fsBmPanel.remove()
       if (search.view === fsView) search.view = sidebarView
+      if (bm.view === fsView) bm.view = sidebarView
     }
 
     renderFsRef = renderFs
@@ -4384,6 +4710,8 @@ export function setup(ctx: SpindleFrontendContext) {
       renderAllPreserveScroll()
       // The messages may have changed (that's usually why a tree arrives).
       if (search.open && search.terms.length) scheduleSearch(undefined, 300)
+      if (bm.characterId !== currentCharacterId) loadBookmarks()
+      else bmPanels.forEach(p => p.refresh())
     }
   })
 
@@ -4578,6 +4906,8 @@ export function setup(ctx: SpindleFrontendContext) {
   }
   createFinder(sidebarView, root.querySelector('.ctv-debug-bar'))
   searchBtn.addEventListener('click', () => { if (search.open) closeSearch(); else openSearch(sidebarView) })
+  createBookmarkPanel(sidebarView, root.querySelector('.ctv-debug-bar'))
+  bookmarksBtn.addEventListener('click', () => { if (bm.open) closeBookmarks(); else openBookmarks(sidebarView) })
 
   // pingBtn removed — uncomment the HTML button and restore this listener to re-enable debug ping
   // pingBtn.addEventListener('click', () => { ctx.sendToBackend({ type: 'ping' }) })
@@ -4644,6 +4974,7 @@ export function setup(ctx: SpindleFrontendContext) {
     hideJumpLoading()
     clearTimeout(autoRefreshTimer)
     clearTimeout(searchTimer)
+    flushBookmarks()       // a rename still waiting to be saved
     fsTeardown?.()         // removes the fullscreen overlay + its keydown listener if open
     tooltip.remove()
     clearTimeout(hoverExpandTimer)

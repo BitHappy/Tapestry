@@ -752,6 +752,67 @@ async function handleSearch(payload: any, userId: string) {
   spindle.sendToFrontend({ type: 'search_results', callId, hits, truncated }, userId);
 }
 
+// ── Bookmarks ───────────────────────────────────────────────────────────────
+//
+// Places in a story to come back to. Saved per user (userStorage), one file per
+// character. The frontend owns the list and saves it whole; this checks every
+// entry's shape and that its chat is one of the user's chats of that character.
+const BOOKMARKS_MAX = 500;
+
+interface Bookmark {
+  id: string
+  chatId: string       // the chat to jump into
+  messageId: string    // that chat's copy of the message
+  index: number        // where it was (to find it again if ids shift)
+  name: string
+  createdAt: number
+}
+
+const bookmarkPath = (characterId: string) => `bookmarks/${String(characterId).replace(/[^\w-]/g, '_')}.json`;
+
+function cleanBookmarks(list: unknown, allowed: Set<string>): Bookmark[] {
+  if (!Array.isArray(list)) return [];
+  const out: Bookmark[] = [];
+  const seen = new Set<string>();
+  for (const b of list) {
+    if (!b || typeof b !== 'object') continue;
+    const { id, chatId, messageId, index, name, createdAt } = b as any;
+    if (typeof id !== 'string' || !id || id.length > 64 || seen.has(id)) continue;
+    if (typeof chatId !== 'string' || !allowed.has(chatId)) continue;
+    if (typeof messageId !== 'string' || !messageId || messageId.length > 128) continue;
+    if (!Number.isInteger(index) || index < 0) continue;
+    seen.add(id);
+    out.push({
+      id, chatId, messageId, index,
+      name: typeof name === 'string' ? name.trim().slice(0, 120) : '',
+      createdAt: Number.isFinite(createdAt) ? createdAt : Date.now(),
+    });
+    if (out.length >= BOOKMARKS_MAX) break;
+  }
+  return out;
+}
+
+async function handleBookmarks(payload: any, userId: string) {
+  const callId = payload.callId;
+  const chat = await spindle.chats.get(payload.chatId, userId);
+  if (!chat) {
+    spindle.sendToFrontend({ type: 'bookmarks_error', callId, error: 'Chat not found' }, userId);
+    return;
+  }
+  const characterId = chat.character_id;
+  const path = bookmarkPath(characterId);
+  if (payload.type === 'bookmarks_get') {
+    const bookmarks = await spindle.userStorage.getJson(path, { fallback: [], userId });
+    spindle.sendToFrontend({ type: 'bookmarks', callId, characterId, bookmarks: Array.isArray(bookmarks) ? bookmarks : [] }, userId);
+    return;
+  }
+  // bookmarks_save — bookmarks on chats that no longer exist are dropped here.
+  const allowed = new Set((await listCharacterChats(characterId, userId)).map(c => c.id));
+  const bookmarks = cleanBookmarks(payload.bookmarks, allowed);
+  await spindle.userStorage.setJson(path, bookmarks, { userId });
+  spindle.sendToFrontend({ type: 'bookmarks', callId, characterId, bookmarks }, userId);
+}
+
 // `reqId` is the frontend's request number, echoed on every reply so it can
 // ignore replies to requests it has since superseded.
 async function handleGetTreeData(characterId: string, userId: string, preferChatId: string | null = null, reqId?: number) {
@@ -1222,6 +1283,16 @@ spindle.onFrontendMessage(async (payload: any, userId: string) => {
       } catch (err: any) {
         spindle.log.error(`[tapestry] get_full_message error: ${err?.message ?? err}`);
         fail(err?.message ?? 'Failed to load message');
+      }
+      return;
+    }
+
+    if (payload.type === 'bookmarks_get' || payload.type === 'bookmarks_save') {
+      try {
+        await handleBookmarks(payload, userId);
+      } catch (err: any) {
+        spindle.log.error(`[tapestry] bookmarks error: ${err?.message ?? err}`);
+        spindle.sendToFrontend({ type: 'bookmarks_error', callId: payload.callId, error: err?.message ?? 'Bookmarks failed' }, userId);
       }
       return;
     }

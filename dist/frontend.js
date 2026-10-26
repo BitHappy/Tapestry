@@ -5,6 +5,7 @@ var LANE_W_TOUCH = 32;
 var NODE_R = 5;
 var FORK_R = 7;
 var PAD = { top: 20, left: 24, right: 24, bottom: 24 };
+var RIBBON_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"><path d="M4.5 2.5h7v11l-3.5-2.6-3.5 2.6z"/></svg>';
 var COLORS = [
   "#8b7ff0",
   "#4db6e8",
@@ -117,7 +118,7 @@ function setup(ctx) {
   ctx.dom.addStyle(`
     .ctv-root { display:flex; flex-direction:column; height:100%; background:var(--lumiverse-bg); color:var(--lumiverse-text); font-family:inherit; overflow:hidden; }
     .ctv-header { display:flex; align-items:flex-start; gap:0; padding:10px 14px; border-bottom:1px solid var(--lumiverse-border); flex-shrink:0; position:relative; }
-    .ctv-header-main { flex:1; display:flex; align-items:center; gap:8px; flex-wrap:wrap; min-width:0; padding-right:98px; }
+    .ctv-header-main { flex:1; display:flex; align-items:center; gap:8px; flex-wrap:wrap; min-width:0; padding-right:130px; }
     /* Top-right action cluster: reload tucked beside the fullscreen button so neither
        steals a row from the legend nor adds height to the header. */
     .ctv-header-actions { position:absolute; top:8px; right:14px; display:flex; align-items:center; gap:6px; }
@@ -194,6 +195,27 @@ function setup(ctx) {
     .ctv-tooltip-swipes.ctv-tooltip-edits:hover { background:rgba(245,184,77,0.85); color:#1a1825; }
     .ctv-edit-badge { fill:#f5b84d; stroke:var(--lumiverse-bg,#13111c); stroke-width:1; pointer-events:none; }
     .ctv-diff-add { background:rgba(91,201,142,0.24); color:inherit; text-decoration:none; border-radius:3px; }
+    /* ── Bookmarks ── */
+    .ctv-bookmark-ribbon { fill:#ff8fab; stroke:var(--lumiverse-bg,#13111c); stroke-width:0.8; pointer-events:none; }
+    .ctv-bookmark-btn.on { color:#ff8fab; border-color:rgba(255,143,171,0.6); }
+    .ctv-bookmark-btn.on svg { fill:currentColor; }
+    .ctv-bookmark-btn:disabled { opacity:0.35; cursor:default; }
+    .ctv-bm-row { display:flex; align-items:center; gap:6px; margin:-1px 0 6px; color:#ff8fab; }
+    .ctv-bm-row svg { width:11px; height:11px; flex-shrink:0; fill:currentColor; }
+    .ctv-bm-name { flex:1; min-width:0; background:transparent; border:1px solid transparent; border-radius:5px; color:var(--lumiverse-text); font-size:12px; font-family:inherit; padding:2px 5px; outline:none; }
+    .ctv-bm-name:hover { border-color:var(--lumiverse-border); }
+    .ctv-bm-name:focus { border-color:rgba(255,143,171,0.6); background:var(--lumiverse-fill-subtle); }
+    .ctv-bm-name::placeholder { color:var(--lumiverse-text-dim); font-style:italic; }
+    .ctv-bm-title { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:0.06em; color:#ff8fab; display:inline-flex; align-items:center; gap:5px; }
+    .ctv-bm-title svg { width:11px; height:11px; fill:currentColor; }
+    .ctv-bm-filter { margin-left:auto; background:var(--lumiverse-fill-subtle); border:1px solid var(--lumiverse-border); border-radius:6px; color:var(--lumiverse-text); font-size:11px; padding:2px 4px; font-family:inherit; }
+    .ctv-bm-head { display:flex; align-items:center; gap:4px; margin-bottom:2px; }
+    .ctv-bm-head .ctv-bm-name { font-weight:600; }
+    .ctv-bm-item.missing { opacity:0.6; cursor:default; }
+    .ctv-bm-go { flex-shrink:0; font-size:10.5px; padding:2px 8px; border-radius:999px; border:1px solid var(--lumiverse-primary-040,#6b63c0); background:var(--lumiverse-primary-015); color:var(--lumiverse-primary-text,#a9a0ff); cursor:pointer; font-family:inherit; white-space:nowrap; }
+    .ctv-bm-go:hover { background:var(--lumiverse-primary-040,#6b63c0); color:#fff; }
+    .ctv-bm-del { flex-shrink:0; width:20px; height:20px; padding:0; border-radius:50%; border:1px solid transparent; background:transparent; color:var(--lumiverse-text-dim); cursor:pointer; font-size:11px; }
+    .ctv-bm-del:hover { border-color:var(--lumiverse-border); color:var(--lumiverse-text); }
     /* ── Search ── */
     .ctv-finder { border-bottom:1px solid var(--lumiverse-border); padding:8px 14px; display:flex; flex-direction:column; gap:6px; flex-shrink:0; }
     .ctv-finder[hidden] { display:none; }
@@ -372,6 +394,7 @@ function setup(ctx) {
         </div>
         <div class="ctv-header-actions">
           <button class="ctv-reload-btn ctv-search-btn" title="Search messages (all branches)">⌕</button>
+          <button class="ctv-reload-btn ctv-bookmarks-btn" title="Bookmarks">${RIBBON_ICON}</button>
           <button class="ctv-reload-btn" title="Force reload tree">↻</button>
           <button class="ctv-expand-btn" title="Open fullscreen view">⛶</button>
         </div>
@@ -393,8 +416,9 @@ function setup(ctx) {
   const zoomInBtn = root.querySelector(".ctv-zoom-in");
   const zoomOutBtn = root.querySelector(".ctv-zoom-out");
   const zoomLabel = root.querySelector(".ctv-zoom-label");
-  const reloadBtn = root.querySelector(".ctv-reload-btn:not(.ctv-search-btn)");
+  const reloadBtn = root.querySelector(".ctv-reload-btn:not(.ctv-search-btn):not(.ctv-bookmarks-btn)");
   const searchBtn = root.querySelector(".ctv-search-btn");
+  const bookmarksBtn = root.querySelector(".ctv-bookmarks-btn");
   const dbg = (msg) => {
     const ts = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
     debugText.textContent = `${ts} ${msg}`;
@@ -418,6 +442,7 @@ function setup(ctx) {
   let tooltipCopyAction = null;
   let tooltipBranchAction = null;
   let tooltipTouchMode = false;
+  let lastMsgTooltip = null;
   let keyNavActive = false;
   let deskPin = null;
   let stepTrackChat = null;
@@ -594,6 +619,7 @@ function setup(ctx) {
   const copyBtnHtml = (title, extraAttrs = "") => `<button type="button" class="ctv-icon-btn ctv-copy-btn" title="${title}" aria-label="${title}"${extraAttrs}>${COPY_ICON}</button>`;
   const BRANCH_ICON_PATHS = '<circle cx="4" cy="3.5" r="1.5"/><circle cx="4" cy="12.5" r="1.5"/><circle cx="10.5" cy="5" r="1.5"/><path d="M4 5v6"/><path d="M10.5 6.5c0 3-6.5 2.5-6.5 4.5"/><path d="M13 10.5v4M11 12.5h4"/>';
   const BRANCH_ICON = `<svg viewBox="0 0 16 16" aria-hidden="true">${BRANCH_ICON_PATHS}</svg>`;
+  const bookmarkBtnHtml = (on, enabled) => `<button type="button" class="ctv-icon-btn ctv-bookmark-btn${on ? " on" : ""}" title="${on ? "Remove bookmark" : "Bookmark this spot"}" aria-label="${on ? "Remove bookmark" : "Bookmark this spot"}" aria-pressed="${on}"${enabled ? "" : " disabled"}>${RIBBON_ICON}</button>`;
   const branchBtnHtml = () => `<button type="button" class="ctv-icon-btn ctv-branch-btn" title="New branch from this message" aria-label="New branch from this message">${BRANCH_ICON}</button>`;
   async function writeClipboard(text) {
     try {
@@ -644,7 +670,8 @@ function setup(ctx) {
   }
   function showMsgTooltip(anchorEl, drawnMsg, opts = {}) {
     greetingView = null;
-    const { onNavigate = null, openedByTouch = false, keepPosition = false, onSwipes = null, onEdits = null, swipeCount = 0, onBranch = null, stepping = false, shown = null } = opts;
+    const { onNavigate = null, openedByTouch = false, keepPosition = false, onSwipes = null, onEdits = null, swipeCount = 0, onBranch = null, stepping = false, shown = null, bookmarkTarget = null } = opts;
+    lastMsgTooltip = { anchorEl, drawnMsg, opts };
     const msg = shown?.msg ?? drawnMsg;
     const chatId = shown?.chatId ?? opts.chatId ?? null;
     const deskStep = stepping && !openedByTouch && !!deskPin;
@@ -709,10 +736,12 @@ function setup(ctx) {
         <div class="ctv-tooltip-rolerow-end">
           ${editsBtn}
           ${swipesBtn}
+          ${onNavigate && bookmarkTarget ? bookmarkBtnHtml(!!findBookmark(bookmarkTarget), bm.ready) : ""}
           ${onNavigate && onBranch ? branchBtnHtml() : ""}
           ${onNavigate ? copyBtnHtml("Copy message") : ""}
         </div>
       </div>
+      ${onNavigate && bookmarkTarget ? bookmarkRowsFor(anchorEl, drawnMsg, bookmarkTarget) : ""}
       <div class="ctv-tooltip-preview">${markTerms(text)}</div>
       ${searchNote}
       ${shown ? `<div class="ctv-tooltip-meta" style="color:#f5b84d">✎ Your branch's version — other branches differ</div>` : ""}
@@ -825,6 +854,8 @@ function setup(ctx) {
       return;
     if (keyNavActive)
       return;
+    if (tooltip.contains(document.activeElement))
+      return;
     clearTimeout(hideTimer);
     hideTimer = setTimeout(hideMsgTooltip, HIDE_GRACE_MS);
   }
@@ -902,6 +933,7 @@ function setup(ctx) {
       onEdits: msg.editedIn?.length ? () => showEditsTooltip(anchorEl, node, msg) : null,
       swipeCount: isMultiSwipe ? msg.swipes.length : 0,
       chatId: node.chatId,
+      bookmarkTarget: mine ? { chatId: mine.chatId, messageId: mine.copy.id, index: msg.index } : { chatId: node.chatId, messageId: msg.id, index: msg.index },
       onBranch: msg.index === lastIdx ? null : mine ? () => branchOnSwipe(mine.chatId, mine.copy, mine.copy.swipeId ?? 0) : () => branchOnSwipe(node.chatId, msg, msg.swipeId ?? 0),
       shown: mine?.edited ? {
         chatId: mine.chatId,
@@ -1024,6 +1056,18 @@ function setup(ctx) {
       pendingExpand();
   });
   tooltip.addEventListener("mouseleave", scheduleHideTooltip);
+  tooltip.addEventListener("input", (e) => {
+    const input = e.target.closest(".ctv-bm-name");
+    if (input?.dataset.bm)
+      renameBookmark(input.dataset.bm, input.value.trim());
+  });
+  tooltip.addEventListener("keydown", (e) => {
+    if (e.target.closest(".ctv-bm-name") && (e.key === "Enter" || e.key === "Escape")) {
+      e.preventDefault();
+      e.stopPropagation();
+      e.target.blur();
+    }
+  });
   tooltip.addEventListener("click", (e) => {
     const target = e.target;
     if (target.closest(".ctv-tooltip-edits")) {
@@ -1032,6 +1076,14 @@ function setup(ctx) {
     }
     if (target.closest(".ctv-tooltip-swipes")) {
       tooltipSwipeAction?.();
+      return;
+    }
+    if (target.closest(".ctv-bookmark-btn") && lastMsgTooltip) {
+      const { anchorEl, drawnMsg, opts } = lastMsgTooltip;
+      const added = toggleBookmark(opts.bookmarkTarget);
+      showMsgTooltip(anchorEl, drawnMsg, { ...opts, keepPosition: true, stepping: false });
+      if (added && !tooltipTouchMode)
+        tooltip.querySelector(".ctv-bm-name")?.focus();
       return;
     }
     const copyBtn = target.closest(".ctv-tooltip-rolerow .ctv-copy-btn");
@@ -1826,36 +1878,40 @@ function setup(ctx) {
     k = (k % search.hits.length + search.hits.length) % search.hits.length;
     search.cursor = k;
     const h = search.hits[k];
-    if (view.getTreeIndex() !== h.treeIdx)
-      view.setTreeIndex(h.treeIdx);
     refreshFinders();
+    const el = focusNode(view, h.lane, h.index, h.treeIdx);
+    view.canvas.querySelectorAll(".ctv-search-current").forEach((x) => x.classList.remove("ctv-search-current"));
+    el?.classList.add("ctv-search-current");
+  }
+  function focusNode(view, lane, index, treeIdx) {
+    if (treeIdx !== -1 && view.getTreeIndex() !== treeIdx)
+      view.setTreeIndex(treeIdx);
     const svg = view.canvas.querySelector("svg");
     if (!svg)
-      return;
-    svg.querySelectorAll(".ctv-search-current").forEach((el) => el.classList.remove("ctv-search-current"));
-    let el = svg.querySelector(`circle.ctv-node[data-node-chat="${CSS.escape(h.lane)}"][data-node-idx="${h.index}"]`);
+      return null;
+    let el = svg.querySelector(`circle.ctv-node[data-node-chat="${CSS.escape(lane)}"][data-node-idx="${index}"]`);
     let msg = el?._msg, node = el?._node;
     if (!el) {
-      for (const p of Array.from(svg.querySelectorAll(`.ctv-pill[data-pill-chat="${CSS.escape(h.lane)}"]`))) {
-        const m = (p._pillMsgs ?? []).find((x) => x.index === h.index);
+      for (const p of Array.from(svg.querySelectorAll(`.ctv-pill[data-pill-chat="${CSS.escape(lane)}"]`))) {
+        const m = (p._pillMsgs ?? []).find((x) => x.index === index);
         if (m) {
           el = p;
           msg = m;
           node = p._node;
-          p.dataset.nodeChat = h.lane;
-          p.dataset.nodeIdx = String(h.index);
+          p.dataset.nodeChat = lane;
+          p.dataset.nodeIdx = String(index);
           p._msg = m;
           break;
         }
       }
     }
     if (!el || !msg)
-      return;
-    el.classList.add("ctv-search-current");
+      return null;
     const cr = view.canvas.getBoundingClientRect(), er = el.getBoundingClientRect();
     view.canvas.scrollLeft += er.left + er.width / 2 - (cr.left + cr.width / 2);
     view.canvas.scrollTop += er.top + er.height / 2 - (cr.top + cr.height / 2);
     showMsgTooltip(el, msg, nodeTooltipOpts(el, node, msg));
+    return el;
   }
   function searchNoteFor(anchorEl, msg, shownChats = []) {
     const lane = anchorEl?.dataset?.nodeChat;
@@ -2013,6 +2069,259 @@ function setup(ctx) {
     view.finder = finder;
     refresh();
     return finder;
+  }
+  const bm = {
+    list: [],
+    characterId: null,
+    chatId: null,
+    ready: false,
+    open: false,
+    filter: "all",
+    view: null
+  };
+  const bmPanels = new Set;
+  let bmSaveTimer = null;
+  async function loadBookmarks() {
+    flushBookmarks();
+    const characterId = currentCharacterId;
+    const chatId = activeChatId && findNodeByChat(activeChatId) ? activeChatId : roots[0]?.chatId ?? null;
+    bm.list = [];
+    bm.ready = false;
+    bm.characterId = characterId;
+    bm.chatId = chatId;
+    refreshBookmarks();
+    if (!chatId)
+      return;
+    try {
+      const reply = await askBackend({ type: "bookmarks_get", chatId }, "bookmarks", "bookmarks_error");
+      if (bm.characterId !== characterId || reply.characterId !== characterId)
+        return;
+      bm.list = reply.bookmarks ?? [];
+      bm.ready = true;
+      refreshBookmarks();
+    } catch (err) {
+      dbg(`bookmarks: ${err?.message ?? err}`);
+    }
+  }
+  function saveBookmarks() {
+    if (!bm.ready)
+      return;
+    clearTimeout(bmSaveTimer);
+    bmSaveTimer = setTimeout(flushBookmarks, 400);
+  }
+  function flushBookmarks() {
+    if (!bmSaveTimer)
+      return;
+    clearTimeout(bmSaveTimer);
+    bmSaveTimer = null;
+    askBackend({ type: "bookmarks_save", chatId: bm.chatId, bookmarks: bm.list }, "bookmarks", "bookmarks_error").catch((err) => showActionError(null, "Couldn't save bookmarks", err));
+  }
+  function resolveBookmark(b) {
+    const node = findNodeByChat(b.chatId);
+    if (!node)
+      return null;
+    const index = node.messages[b.index]?.id === b.messageId ? b.index : node.messages.findIndex((m) => m.id === b.messageId);
+    if (index === -1)
+      return null;
+    const lane = laneOwnerOf(b.chatId, index) ?? b.chatId;
+    return { lane, index, key: `${lane}:${index}`, treeIdx: roots.findIndex((r) => treeContainsChat(r, lane)) };
+  }
+  const findBookmark = (t) => t ? bm.list.find((b) => b.chatId === t.chatId && b.messageId === t.messageId) ?? null : null;
+  function toggleBookmark(t) {
+    if (!bm.ready || !t)
+      return null;
+    const i = bm.list.findIndex((b) => b.chatId === t.chatId && b.messageId === t.messageId);
+    let added = null;
+    if (i !== -1)
+      bm.list.splice(i, 1);
+    else {
+      added = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 8), chatId: t.chatId, messageId: t.messageId, index: t.index, name: "", createdAt: Date.now() };
+      bm.list.push(added);
+    }
+    saveBookmarks();
+    refreshBookmarks();
+    return added;
+  }
+  function renameBookmark(id, name) {
+    const b = bm.list.find((x) => x.id === id);
+    if (!b || b.name === name)
+      return;
+    b.name = name;
+    saveBookmarks();
+    bmPanels.forEach((p) => p.refresh(id));
+  }
+  function refreshBookmarks() {
+    document.querySelectorAll("svg.ctv-svg").forEach((svg) => decorateBookmarks(svg));
+    bmPanels.forEach((p) => p.refresh());
+  }
+  function decorateBookmarks(svg, follow = null) {
+    svg.querySelectorAll(".ctv-bookmark-ribbon").forEach((el) => el.remove());
+    if (!bm.list.length)
+      return;
+    const keys = new Set(bm.list.map(resolveBookmark).filter(Boolean).map((r) => r.key));
+    if (!keys.size)
+      return;
+    const horizontal = svg.dataset.orientation === "horizontal";
+    const place = (ref, cx, cy, r) => {
+      const x = horizontal ? cx - 3 : cx - r - 9;
+      const y = horizontal ? cy - r - 11 : cy - 5;
+      const rib = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      rib.setAttribute("d", `M ${x} ${y} h 6 v 9 l -3 -2.4 l -3 2.4 z`);
+      rib.classList.add("ctv-bookmark-ribbon");
+      svg.appendChild(rib);
+      follow?.(rib, ref);
+    };
+    svg.querySelectorAll("circle.ctv-node").forEach((c) => {
+      if (keys.has(`${c.dataset.nodeChat}:${c.dataset.nodeIdx}`)) {
+        place(c, +c.getAttribute("cx"), +c.getAttribute("cy"), +c.getAttribute("r"));
+      }
+    });
+    svg.querySelectorAll(".ctv-pill").forEach((p) => {
+      if ((p._pillMsgs ?? []).some((m) => keys.has(`${p.dataset.pillChat}:${m.index}`))) {
+        const w = +p.getAttribute("width"), h = +p.getAttribute("height");
+        place(p, +p.getAttribute("x") + w / 2, +p.getAttribute("y") + h / 2, (horizontal ? h : w) / 2);
+      }
+    });
+  }
+  function bookmarkRowsFor(anchorEl, drawnMsg, target) {
+    const mine = findBookmark(target);
+    const lane = anchorEl?.dataset?.nodeChat;
+    const others = lane ? bm.list.filter((b) => b !== mine && resolveBookmark(b)?.key === `${lane}:${drawnMsg.index}`) : [];
+    let html = "";
+    if (mine) {
+      html += `<div class="ctv-bm-row">${RIBBON_ICON}<input class="ctv-bm-name" data-bm="${escHtml(mine.id)}" value="${escHtml(mine.name)}" placeholder="Name this bookmark (optional)" maxlength="120" spellcheck="false"></div>`;
+    }
+    if (others.length) {
+      const names = others.map((b) => (b.name ? `“${b.name}” ` : "") + `in ${chatLabel(b.chatId)}`);
+      html += `<div class="ctv-tooltip-meta" style="color:#ff8fab">Also bookmarked ${escHtml(names.join(", "))}</div>`;
+    }
+    return html;
+  }
+  function openBookmarks(view) {
+    bm.open = true;
+    bm.view = view;
+    bmPanels.forEach((p) => p.refresh());
+  }
+  function closeBookmarks() {
+    bm.open = false;
+    bmPanels.forEach((p) => p.refresh());
+  }
+  function createBookmarkPanel(view, beforeEl) {
+    const el = document.createElement("div");
+    el.className = "ctv-finder ctv-bm-panel";
+    el.hidden = true;
+    el.innerHTML = `
+      <div class="ctv-find-row">
+        <span class="ctv-bm-title">${RIBBON_ICON}Bookmarks</span>
+        <select class="ctv-bm-filter" aria-label="Show bookmarks from"></select>
+        <button type="button" class="ctv-zoom-btn" data-bm-act="close" title="Close bookmarks">✕</button>
+      </div>
+      <div class="ctv-find-list"></div>
+    `;
+    beforeEl.parentNode.insertBefore(el, beforeEl);
+    const filter = el.querySelector(".ctv-bm-filter");
+    const list = el.querySelector(".ctv-find-list");
+    filter.addEventListener("change", () => {
+      bm.filter = filter.value;
+      bmPanels.forEach((p) => p.refresh());
+    });
+    el.addEventListener("click", (e) => {
+      const t = e.target;
+      if (t.closest('[data-bm-act="close"]')) {
+        closeBookmarks();
+        return;
+      }
+      const item = t.closest(".ctv-bm-item");
+      if (!item)
+        return;
+      const b = bm.list.find((x) => x.id === item.dataset.id);
+      if (!b)
+        return;
+      if (t.closest(".ctv-bm-del")) {
+        bm.list.splice(bm.list.indexOf(b), 1);
+        saveBookmarks();
+        refreshBookmarks();
+        return;
+      }
+      const at = resolveBookmark(b);
+      if (t.closest(".ctv-bm-go")) {
+        if (!at)
+          return;
+        hideMsgTooltip();
+        navigateToMessage(b.chatId, findNodeByChat(b.chatId)?.messages[at.index]?.id ?? b.messageId, at.index);
+        return;
+      }
+      if (t.closest(".ctv-bm-name"))
+        return;
+      if (at)
+        focusNode(view, at.lane, at.index, at.treeIdx);
+    });
+    el.addEventListener("input", (e) => {
+      const input = e.target.closest(".ctv-bm-name");
+      const id = input?.closest(".ctv-bm-item")?.getAttribute("data-id");
+      if (input && id)
+        renameBookmark(id, input.value.trim());
+    });
+    el.addEventListener("keydown", (e) => {
+      if (e.target.closest(".ctv-bm-name") && (e.key === "Enter" || e.key === "Escape")) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.target.blur();
+      }
+    });
+    const refresh = (skipId = null) => {
+      el.hidden = !bm.open;
+      if (!bm.open)
+        return;
+      const trees = roots.length;
+      filter.hidden = trees < 2;
+      const opts = ['<option value="all">All trees</option>', ...roots.map((_, i) => `<option value="${i}">Tree ${i + 1}</option>`)].join("");
+      if (filter.innerHTML !== opts)
+        filter.innerHTML = opts;
+      if (bm.filter !== "all" && +bm.filter >= trees)
+        bm.filter = "all";
+      filter.value = bm.filter;
+      if (skipId && list.contains(document.activeElement))
+        return;
+      const rows = bm.list.map((b) => ({ b, at: resolveBookmark(b) })).filter(({ at }) => bm.filter === "all" || at && at.treeIdx === +bm.filter).sort((x, y) => (x.at ? 0 : 1) - (y.at ? 0 : 1) || (x.at?.treeIdx ?? 0) - (y.at?.treeIdx ?? 0) || (x.at?.index ?? 0) - (y.at?.index ?? 0));
+      if (!bm.ready) {
+        list.innerHTML = `<div class="ctv-find-note">Loading bookmarks…</div>`;
+        return;
+      }
+      if (!rows.length) {
+        list.innerHTML = `<div class="ctv-find-note">${bm.list.length ? "No bookmarks in this tree." : "No bookmarks yet — use the ribbon button in a message’s preview to add one."}</div>`;
+        return;
+      }
+      list.innerHTML = rows.map(({ b, at }) => {
+        const msg = at ? findNodeByChat(at.lane)?.messages[at.index] : null;
+        const version = msg?.editedIn?.find((g) => g.chats.some((c) => c.chatId === b.chatId));
+        const text = (version?.text ?? msg?.preview ?? "").replace(/\s+/g, " ").trim();
+        const where = at ? [
+          trees > 1 ? `Tree ${at.treeIdx + 1}` : "",
+          chatLabel(b.chatId),
+          `msg ${at.index + 1}`,
+          msg ? msg.role === "user" ? "You" : msg.role === "assistant" ? "AI" : "System" : ""
+        ].filter(Boolean).join(" · ") : "This message no longer exists";
+        return `
+          <div class="ctv-find-item ctv-bm-item${at ? "" : " missing"}" data-id="${escHtml(b.id)}" title="${at ? "Show on the map" : ""}">
+            <div class="ctv-bm-head">
+              <input class="ctv-bm-name" value="${escHtml(b.name)}" placeholder="Unnamed bookmark" maxlength="120" spellcheck="false" aria-label="Bookmark name">
+              ${at ? `<button type="button" class="ctv-bm-go" title="Open this chat at this message">→ Go</button>` : ""}
+              <button type="button" class="ctv-bm-del" title="Remove bookmark" aria-label="Remove bookmark">✕</button>
+            </div>
+            <div class="ctv-find-meta">${escHtml(where)}</div>
+            ${text ? `<div class="ctv-find-snip">${escHtml(truncate(text, 160))}</div>` : ""}
+          </div>`;
+      }).join("");
+    };
+    const panel = { refresh, remove: () => {
+      bmPanels.delete(panel);
+      el.remove();
+    } };
+    bmPanels.add(panel);
+    view.bmPanel = panel;
+    refresh();
+    return panel;
   }
   function assignColors(node, counter, map) {
     map.set(node.chatId, COLORS[counter.n++ % COLORS.length]);
@@ -2889,7 +3198,14 @@ function setup(ctx) {
         }
       }
     }
+    svg.dataset.orientation = orientation;
     decorateSearch(svg);
+    decorateBookmarks(svg, (el, ref) => {
+      if (slideEls.includes(ref))
+        slideEls.push(el);
+      else if (fadeinEls.includes(ref))
+        fadeinEls.push(el);
+    });
     const padX = Math.round((container.clientWidth || 360) / 2);
     const padY = Math.round((container.clientHeight || 600) / 2);
     const wrap = document.createElement("div");
@@ -3249,6 +3565,7 @@ function setup(ctx) {
             <button class="ctv-zoom-btn" data-fs-zoom-in title="Zoom in (Ctrl+scroll)">+</button>
           </div>
           <button class="ctv-zoom-btn" data-fs-search title="Search messages (all branches)">⌕</button>
+          <button class="ctv-zoom-btn" data-fs-bookmarks title="Bookmarks">${RIBBON_ICON}</button>
           <button class="ctv-fs-close-btn" title="Close (Esc)">✕</button>
         </div>
         <div class="ctv-fs-canvas-wrap"></div>
@@ -3328,6 +3645,13 @@ function setup(ctx) {
       }
     };
     const fsFinder = createFinder(fsView, fsCanvas);
+    const fsBmPanel = createBookmarkPanel(fsView, fsCanvas);
+    overlay.querySelector("[data-fs-bookmarks]").addEventListener("click", () => {
+      if (bm.open && bm.view === fsView)
+        closeBookmarks();
+      else
+        openBookmarks(fsView);
+    });
     overlay.querySelector("[data-fs-search]").addEventListener("click", () => {
       if (search.open && search.view === fsView)
         closeSearch();
@@ -3336,8 +3660,11 @@ function setup(ctx) {
     });
     const dropFsFinder = () => {
       fsFinder.remove();
+      fsBmPanel.remove();
       if (search.view === fsView)
         search.view = sidebarView;
+      if (bm.view === fsView)
+        bm.view = sidebarView;
     };
     renderFsRef = renderFs;
     renderFs();
@@ -3849,6 +4176,10 @@ function setup(ctx) {
       renderAllPreserveScroll();
       if (search.open && search.terms.length)
         scheduleSearch(undefined, 300);
+      if (bm.characterId !== currentCharacterId)
+        loadBookmarks();
+      else
+        bmPanels.forEach((p) => p.refresh());
     }
   });
   let treeDirty = false;
@@ -4030,6 +4361,13 @@ function setup(ctx) {
     else
       openSearch(sidebarView);
   });
+  createBookmarkPanel(sidebarView, root.querySelector(".ctv-debug-bar"));
+  bookmarksBtn.addEventListener("click", () => {
+    if (bm.open)
+      closeBookmarks();
+    else
+      openBookmarks(sidebarView);
+  });
   reloadBtn.addEventListener("click", () => {
     dbg("Force reload…");
     roots = [];
@@ -4079,6 +4417,7 @@ function setup(ctx) {
     hideJumpLoading();
     clearTimeout(autoRefreshTimer);
     clearTimeout(searchTimer);
+    flushBookmarks();
     fsTeardown?.();
     tooltip.remove();
     clearTimeout(hoverExpandTimer);

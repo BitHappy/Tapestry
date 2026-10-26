@@ -461,6 +461,58 @@ async function handleSearch(payload, userId) {
   }
   spindle.sendToFrontend({ type: "search_results", callId, hits, truncated }, userId);
 }
+var BOOKMARKS_MAX = 500;
+var bookmarkPath = (characterId) => `bookmarks/${String(characterId).replace(/[^\w-]/g, "_")}.json`;
+function cleanBookmarks(list, allowed) {
+  if (!Array.isArray(list))
+    return [];
+  const out = [];
+  const seen = new Set;
+  for (const b of list) {
+    if (!b || typeof b !== "object")
+      continue;
+    const { id, chatId, messageId, index, name, createdAt } = b;
+    if (typeof id !== "string" || !id || id.length > 64 || seen.has(id))
+      continue;
+    if (typeof chatId !== "string" || !allowed.has(chatId))
+      continue;
+    if (typeof messageId !== "string" || !messageId || messageId.length > 128)
+      continue;
+    if (!Number.isInteger(index) || index < 0)
+      continue;
+    seen.add(id);
+    out.push({
+      id,
+      chatId,
+      messageId,
+      index,
+      name: typeof name === "string" ? name.trim().slice(0, 120) : "",
+      createdAt: Number.isFinite(createdAt) ? createdAt : Date.now()
+    });
+    if (out.length >= BOOKMARKS_MAX)
+      break;
+  }
+  return out;
+}
+async function handleBookmarks(payload, userId) {
+  const callId = payload.callId;
+  const chat = await spindle.chats.get(payload.chatId, userId);
+  if (!chat) {
+    spindle.sendToFrontend({ type: "bookmarks_error", callId, error: "Chat not found" }, userId);
+    return;
+  }
+  const characterId = chat.character_id;
+  const path = bookmarkPath(characterId);
+  if (payload.type === "bookmarks_get") {
+    const bookmarks = await spindle.userStorage.getJson(path, { fallback: [], userId });
+    spindle.sendToFrontend({ type: "bookmarks", callId, characterId, bookmarks: Array.isArray(bookmarks) ? bookmarks : [] }, userId);
+    return;
+  }
+  const allowed = new Set((await listCharacterChats(characterId, userId)).map((c) => c.id));
+  const bookmarks = cleanBookmarks(payload.bookmarks, allowed);
+  await spindle.userStorage.setJson(path, bookmarks, { userId });
+  spindle.sendToFrontend({ type: "bookmarks", callId, characterId, bookmarks }, userId);
+}
 async function handleGetTreeData(characterId, userId, preferChatId = null, reqId) {
   try {
     let computeForkIndex2 = function(chatId) {
@@ -845,6 +897,15 @@ spindle.onFrontendMessage(async (payload, userId) => {
       } catch (err) {
         spindle.log.error(`[tapestry] get_full_message error: ${err?.message ?? err}`);
         fail(err?.message ?? "Failed to load message");
+      }
+      return;
+    }
+    if (payload.type === "bookmarks_get" || payload.type === "bookmarks_save") {
+      try {
+        await handleBookmarks(payload, userId);
+      } catch (err) {
+        spindle.log.error(`[tapestry] bookmarks error: ${err?.message ?? err}`);
+        spindle.sendToFrontend({ type: "bookmarks_error", callId: payload.callId, error: err?.message ?? "Bookmarks failed" }, userId);
       }
       return;
     }
