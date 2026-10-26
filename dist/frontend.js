@@ -188,8 +188,8 @@ function setup(ctx) {
     .ctv-tooltip-swipes { flex-shrink:0; padding:2px 9px; border-radius:999px; border:1px solid var(--lumiverse-primary-040,#6b63c0); background:var(--lumiverse-primary-015); color:var(--lumiverse-primary-text,#a9a0ff); font-size:10.5px; font-weight:600; font-family:inherit; cursor:pointer; white-space:nowrap; transition:all 120ms; }
     .ctv-tooltip-swipes:hover { background:var(--lumiverse-primary-040,#6b63c0); color:#fff; }
     .ctv-tooltip-swipes:active { transform:scale(0.97); }
-    /* Edited copies: amber, so they read apart from swipes (another version in a
-       different branch, not in this chat). */
+    /* Versions that differ between branches: amber, so they read apart from swipes
+       (another version in a different branch, not in this chat). */
     .ctv-tooltip-swipes.ctv-tooltip-edits { border-color:rgba(245,184,77,0.55); background:rgba(245,184,77,0.12); color:#f5b84d; }
     .ctv-tooltip-swipes.ctv-tooltip-edits:hover { background:rgba(245,184,77,0.85); color:#1a1825; }
     .ctv-edit-badge { fill:#f5b84d; stroke:var(--lumiverse-bg,#13111c); stroke-width:1; pointer-events:none; }
@@ -655,8 +655,8 @@ function setup(ctx) {
       const jumpHint = onNavigate ? openedByTouch ? "" : "Click node to jump" : "Click node to jump";
       const hintText = [moreHint, jumpHint].filter(Boolean).join(" · ");
       const swipesBtn = onSwipes ? msg.greetingVariants ? `<button type="button" class="ctv-tooltip-swipes" title="View this character's greetings and the chats that use them">⇄ Greetings</button>` : `<button type="button" class="ctv-tooltip-swipes" title="View all swipes">⇄ ${swipeCount} swipes</button>` : "";
-      const editCount = (msg.editedIn ?? []).length;
-      const editsBtn = onEdits ? `<button type="button" class="ctv-tooltip-swipes ctv-tooltip-edits" title="This message was edited in another branch — compare the versions">✎ ${editCount} edit${editCount === 1 ? "" : "s"}</button>` : "";
+      const versionCount = (msg.editedIn ?? []).length + 1;
+      const editsBtn = onEdits ? `<button type="button" class="ctv-tooltip-swipes ctv-tooltip-edits" title="Branches have different versions of this message — compare them">✎ ${versionCount} versions</button>` : "";
       const actions = !onNavigate ? "" : openedByTouch ? `
       <div class="ctv-tooltip-actions">
         <button type="button" class="ctv-tooltip-arrow ctv-tooltip-prev" aria-label="Previous node"${hasPrev ? "" : " disabled"}>${ARROW_LEFT}</button>
@@ -681,7 +681,7 @@ function setup(ctx) {
         </div>
       </div>
       <div class="ctv-tooltip-preview">${escHtml(text)}</div>
-      ${shown ? `<div class="ctv-tooltip-meta" style="color:#f5b84d">✎ Your branch's version — edited after branching</div>` : ""}
+      ${shown ? `<div class="ctv-tooltip-meta" style="color:#f5b84d">✎ Your branch's version — other branches differ</div>` : ""}
       ${ts ? `<div class="ctv-tooltip-meta">${ts}</div>` : ""}
       ${hintText ? `<div class="ctv-tooltip-hint">${hintText}</div>` : ""}
       ${actions}
@@ -1216,47 +1216,60 @@ function setup(ctx) {
       anchorEl.classList.add("ctv-node-peek");
     }
     const label = msg.role === "user" ? "User" : msg.role === "assistant" ? "AI" : "System";
-    const groups = msg.editedIn ?? [];
-    const texts = [msg.preview || "", ...groups.map((g) => g.text || "")];
-    let currentRow = -1;
-    if (activeChatId) {
-      const gi = groups.findIndex((g) => g.chats.some((c) => c.chatId === activeChatId));
-      if (gi !== -1)
-        currentRow = gi + 1;
-      else if ((findNodeByChat(activeChatId)?.messages.length ?? 0) > msg.index && laneOwnerOf(activeChatId, msg.index) === node.chatId)
-        currentRow = 0;
-    }
-    const rowHtml = (k) => {
-      const g = groups[k - 1];
-      const dests = k === 0 ? [`<button class="ctv-swipe-act go" data-row="0">→ ${escHtml(truncate(branchLabel(node.chatName, node.branchPath), 22))}</button>`] : g.chats.map((c) => `<button class="ctv-swipe-act go" data-row="${k}" data-dest-chat="${escHtml(c.chatId)}" data-dest-msg="${escHtml(c.messageId)}">→ ${escHtml(truncate(branchLabel(c.name, c.branchPath), 22))}</button>`);
-      const title = k === 0 ? "Original" : `Edited in ${g.chats.length} branch${g.chats.length === 1 ? "" : "es"}`;
-      return `
-        <div class="ctv-swipe-row${k === currentRow ? " active" : ""}" data-row="${k}">
+    const versions = [
+      {
+        text: msg.preview || "",
+        truncated: !!msg.truncated,
+        lane: true,
+        src: { chatId: node.chatId, messageId: msg.id },
+        dests: [{ chatId: node.chatId, messageId: msg.id, label: branchLabel(node.chatName, node.branchPath) }]
+      },
+      ...(msg.editedIn ?? []).map((g) => ({
+        text: g.text || "",
+        truncated: !!g.truncated,
+        lane: false,
+        src: { chatId: g.chats[0].chatId, messageId: g.chats[0].messageId },
+        dests: g.chats.map((c) => ({ chatId: c.chatId, messageId: c.messageId, label: branchLabel(c.name, c.branchPath) }))
+      }))
+    ];
+    let current = versions.findIndex((v) => !v.lane && v.dests.some((d) => d.chatId === activeChatId));
+    if (current === -1 && activeChatId && (findNodeByChat(activeChatId)?.messages.length ?? 0) > msg.index && laneOwnerOf(activeChatId, msg.index) === node.chatId)
+      current = 0;
+    const order = current > 0 ? [current, ...versions.keys()].filter((k, i, a) => a.indexOf(k) === i) : [...versions.keys()];
+    const rows = order.map((k) => versions[k]);
+    const titleOf = (v, r) => {
+      if (order[r] === current)
+        return "Current version";
+      if (v.lane)
+        return `Version in ${escHtml(truncate(v.dests[0].label, 24))}`;
+      return `Version in ${v.dests.length} branch${v.dests.length === 1 ? "" : "es"}`;
+    };
+    const rowHtml = (v, r) => `
+        <div class="ctv-swipe-row${order[r] === current ? " active" : ""}">
           <div class="ctv-swipe-head" title="Click to expand the text">
             <span class="ctv-swipe-caret"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M3.5 2.5 L8 5 L3.5 7.5 Z"/></svg></span>
-            <span class="ctv-swipe-num">${title}${k === currentRow ? " · current" : ""}</span>
-            ${copyBtnHtml("Copy this version", ` data-row="${k}"`)}
+            <span class="ctv-swipe-num">${titleOf(v, r)}</span>
+            ${copyBtnHtml("Copy this version", ` data-row="${r}"`)}
           </div>
           <div class="ctv-swipe-text"></div>
-          <div class="ctv-swipe-actions">${dests.join("")}</div>
+          <div class="ctv-swipe-actions">${v.dests.map((d) => `<button class="ctv-swipe-act go" data-dest-chat="${escHtml(d.chatId)}" data-dest-msg="${escHtml(d.messageId)}">→ ${escHtml(truncate(d.label, 22))}</button>`).join("")}</div>
         </div>`;
-    };
     tooltip.innerHTML = `
       <div class="ctv-swipe-header">
         <button type="button" class="ctv-swipe-back" title="Back to message preview">‹ Back</button>
-        <div class="ctv-tooltip-role">${label} · msg ${msg.index + 1} · ✎ ${groups.length} edited</div>
+        <div class="ctv-tooltip-role">${label} · msg ${msg.index + 1} · ✎ ${versions.length} versions</div>
       </div>
-      <div class="ctv-swipe-list">${texts.map((_, k) => rowHtml(k)).join("")}</div>
-      <div class="ctv-tooltip-hint">Highlights show what changed from the original · → opens that branch</div>
+      <div class="ctv-swipe-list">${rows.map(rowHtml).join("")}</div>
+      <div class="ctv-tooltip-hint">Highlights show how each differs from ${current === -1 ? "the first" : "yours"} · → opens that branch</div>
     `;
     const rowEls = Array.from(tooltip.querySelectorAll(".ctv-swipe-row"));
-    const paint = (k) => {
-      const el = rowEls[k]?.querySelector(".ctv-swipe-text");
+    const paint = (r) => {
+      const el = rowEls[r]?.querySelector(".ctv-swipe-text");
       if (!el)
         return;
-      el.innerHTML = k === 0 ? escHtml(texts[0] || "(empty)") : diffHtml(texts[0], texts[k] || "");
+      el.innerHTML = r === 0 ? escHtml(rows[0].text || "(empty)") : diffHtml(rows[0].text, rows[r].text);
     };
-    texts.forEach((_, k) => paint(k));
+    rows.forEach((_, r) => paint(r));
     tooltip.querySelector(".ctv-swipe-back")?.addEventListener("click", (e) => {
       e.stopPropagation();
       showMsgTooltip(anchorEl, msg, nodeTooltipOpts(anchorEl, node, msg));
@@ -1270,17 +1283,9 @@ function setup(ctx) {
     tooltip.querySelectorAll(".ctv-swipe-head .ctv-copy-btn").forEach((btn) => {
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
-        const k = parseInt(btn.getAttribute("data-row") || "0", 10);
-        if (k === 0) {
-          copyMessageText(btn, node.chatId, msg);
-          return;
-        }
-        const g = groups[k - 1];
-        if (!g.truncated) {
-          copyTextWithFeedback(btn, g.text);
-          return;
-        }
-        requestFullText(g.chats[0].chatId, g.chats[0].messageId, (entry) => copyTextWithFeedback(btn, entry.content ?? ""), () => flashCopyResult(btn, false));
+        const v = rows[parseInt(btn.getAttribute("data-row") || "0", 10)];
+        if (v)
+          copyMessageText(btn, v.src.chatId, { id: v.src.messageId, preview: v.text, truncated: v.truncated });
       });
     });
     tooltip.querySelectorAll(".ctv-swipe-act").forEach((btn) => {
@@ -1288,37 +1293,28 @@ function setup(ctx) {
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
         hideMsgTooltip();
-        if (destChat)
-          navigateToMessage(destChat, btn.getAttribute("data-dest-msg"), msg.index);
-        else
-          navigateToMessage(node.chatId, msg.id, msg.index);
+        navigateToMessage(destChat, btn.getAttribute("data-dest-msg"), msg.index);
       });
-      if (destChat) {
-        btn.addEventListener("mouseenter", () => setBranchHighlight(destChat, true));
-        btn.addEventListener("mouseleave", () => setBranchHighlight(destChat, false));
-      } else {
-        btn.addEventListener("mouseenter", () => anchorEl.classList.add("ctv-branch-hl"));
-        btn.addEventListener("mouseleave", () => anchorEl.classList.remove("ctv-branch-hl"));
-      }
+      const hl = (on) => destChat === node.chatId ? anchorEl.classList.toggle("ctv-branch-hl", on) : setBranchHighlight(destChat, on);
+      btn.addEventListener("mouseenter", () => hl(true));
+      btn.addEventListener("mouseleave", () => hl(false));
     });
     tooltip.style.display = "block";
     tooltip.querySelectorAll(".ctv-swipe-actions").forEach(packActionRows);
     positionTooltip(anchorEl, docked, false);
     const stillOpen = () => hoverAnchorEl === anchorEl && !!rowEls[0]?.isConnected;
-    const fill = (k, chatId, messageId) => requestFullText(chatId, messageId, (entry) => {
-      if (!stillOpen() || !entry.content)
+    rows.forEach((v, r) => {
+      if (!v.truncated)
         return;
-      texts[k] = entry.content;
-      if (k === 0)
-        texts.forEach((_, j) => paint(j));
-      else
-        paint(k);
-    });
-    if (msg.truncated)
-      fill(0, node.chatId, msg.id);
-    groups.forEach((g, i) => {
-      if (g.truncated)
-        fill(i + 1, g.chats[0].chatId, g.chats[0].messageId);
+      requestFullText(v.src.chatId, v.src.messageId, (entry) => {
+        if (!stillOpen() || !entry.content)
+          return;
+        v.text = entry.content;
+        if (r === 0)
+          rows.forEach((_, j) => paint(j));
+        else
+          paint(r);
+      });
     });
   }
   const cardGreetings = new Map;
@@ -2326,7 +2322,7 @@ function setup(ctx) {
           pillLabel.textContent = String(seg.msgs.length);
           const first = seg.msgs[0], last = seg.msgs[seg.msgs.length - 1];
           const editedInPill = seg.msgs.filter((m) => m.editedIn?.length).length;
-          const editedNote = editedInPill ? `<div class="ctv-tooltip-meta" style="color:#f5b84d">✎ ${editedInPill} edited in another branch</div>` : "";
+          const editedNote = editedInPill ? `<div class="ctv-tooltip-meta" style="color:#f5b84d">✎ ${editedInPill} with different versions in other branches</div>` : "";
           const tsFirst = first.timestamp ? new Date(first.timestamp * 1000).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
           const tsLast = last.timestamp ? new Date(last.timestamp * 1000).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
           const doExpandPill = () => {
@@ -2657,8 +2653,8 @@ function setup(ctx) {
       <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><circle cx="5" cy="5" r="4" fill="currentColor"/></svg><span>AI</span>
       <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><circle cx="5" cy="5" r="4" fill="currentColor" fill-opacity="0.45"/></svg><span>You</span>`;
     if (allBranches.some((lb) => lb.node.messages.some((m) => m.editedIn?.length))) {
-      key.title += " · amber corner: edited in another branch";
-      key.insertAdjacentHTML("beforeend", `<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><circle cx="5" cy="5" r="3.2" fill="#f5b84d"/></svg><span>Edited</span>`);
+      key.title += " · amber corner: branches have different versions of this message";
+      key.insertAdjacentHTML("beforeend", `<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><circle cx="5" cy="5" r="3.2" fill="#f5b84d"/></svg><span>Differs</span>`);
     }
     target.appendChild(key);
     for (const el of staticEls)
