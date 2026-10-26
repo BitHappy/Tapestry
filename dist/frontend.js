@@ -2704,6 +2704,7 @@ function setup(ctx) {
       msgCursorMapFs = new Map;
       overlay.classList.remove("ctv-fs-visible");
       overlay.addEventListener("transitionend", () => overlay.remove(), { once: true });
+      setTimeout(() => overlay.remove(), 400);
       syncZoomButtons();
       renderAll();
       document.removeEventListener("keydown", onKey);
@@ -2714,7 +2715,7 @@ function setup(ctx) {
         close();
     });
     const onKey = (e) => {
-      if (e.key === "Escape")
+      if (e.key === "Escape" && !e.target?.closest?.("input, textarea"))
         close();
     };
     document.addEventListener("keydown", onKey);
@@ -3146,9 +3147,16 @@ function setup(ctx) {
     }
     if (payload.type === "tree_data") {
       isSoftRefreshing = false;
+      const newCharacterId = payload.characterId ?? null;
+      if (currentCharacterId && newCharacterId !== currentCharacterId) {
+        savedScrollForRefresh = null;
+        expandedPills.clear();
+        activeTreeIndex = 0;
+        canvasWrap.replaceChildren();
+      }
       roots = payload.roots ?? [];
       fullTextCache.clear();
-      currentCharacterId = payload.characterId ?? null;
+      currentCharacterId = newCharacterId;
       if (!activeChatId) {
         const active = ctx.getActiveChat?.();
         if (active?.chatId)
@@ -3193,8 +3201,13 @@ function setup(ctx) {
     if (p.action !== "navigated")
       softRefresh(p.chatId);
   });
-  ctx.events.on("CHAT_CREATED", () => {
-    if (activeChatId)
+  ctx.events.on("CHAT_CREATED", (p) => {
+    const charId = p?.chat?.character_id;
+    if (activeChatId && (!charId || !currentCharacterId || charId === currentCharacterId))
+      softRefresh(activeChatId);
+  });
+  ctx.events.on("CHAT_DELETED", (p) => {
+    if (activeChatId && p?.id && findNodeByChat(p.id))
       softRefresh(activeChatId);
   });
   ctx.events.on("MESSAGE_DELETED", (p) => softRefresh(p.chatId));

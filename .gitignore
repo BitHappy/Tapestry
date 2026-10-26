@@ -3,4 +3,4 @@ node_modules/
 
 # OS and editor clutter
 .DS_Store
-thumbs.db
+Thumbs.db

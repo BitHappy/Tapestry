@@ -3168,6 +3168,9 @@ export function setup(ctx: SpindleFrontendContext) {
       msgCursorMapFs = new Map()
       overlay.classList.remove('ctv-fs-visible')
       overlay.addEventListener('transitionend', () => overlay.remove(), { once: true })
+      // transitionend never fires if transitions are off (reduced motion, a theme
+      // that disables them), which would leave the invisible overlay behind.
+      setTimeout(() => overlay.remove(), 400)
       // Re-render the sidebar at the (possibly changed) zoom level and sync its buttons.
       syncZoomButtons()
       renderAll()
@@ -3176,7 +3179,8 @@ export function setup(ctx: SpindleFrontendContext) {
 
     closeBtn.addEventListener('click', close)
     overlay.addEventListener('click', e => { if (e.target === overlay) close() })
-    const onKey = e => { if (e.key === 'Escape') close() }
+    // Esc in the legend's rename box only cancels the rename.
+    const onKey = e => { if (e.key === 'Escape' && !e.target?.closest?.('input, textarea')) close() }
     document.addEventListener('keydown', onKey)
 
     fsTeardown = () => {
@@ -3685,9 +3689,19 @@ export function setup(ctx: SpindleFrontendContext) {
     }
     if (payload.type === 'tree_data') {
       isSoftRefreshing = false
+      // A different character's tree replaces the old one: start it as a fresh
+      // view (centred, first tree, nothing expanded) rather than carrying over
+      // the old tree's scroll position, which lands somewhere arbitrary on it.
+      const newCharacterId = payload.characterId ?? null
+      if (currentCharacterId && newCharacterId !== currentCharacterId) {
+        savedScrollForRefresh = null
+        expandedPills.clear()
+        activeTreeIndex = 0
+        canvasWrap.replaceChildren()
+      }
       roots = payload.roots ?? []
       fullTextCache.clear()
-      currentCharacterId = payload.characterId ?? null
+      currentCharacterId = newCharacterId
       // On first load CHAT_SWITCHED may not have fired yet — ask the host directly.
       if (!activeChatId) {
         const active = ctx.getActiveChat?.()
@@ -3740,8 +3754,15 @@ export function setup(ctx: SpindleFrontendContext) {
   ctx.events.on('MESSAGE_SENT', p => softRefresh(p.chatId))
   // Swipe added or deleted → pill counts/branches change (navigated = no structure change)
   ctx.events.on('MESSAGE_SWIPED', p => { if (p.action !== 'navigated') softRefresh(p.chatId) })
-  // New branch created (branch = new chat in same tree)
-  ctx.events.on('CHAT_CREATED', () => { if (activeChatId) softRefresh(activeChatId) })
+  // New branch created (branch = new chat in same tree). Chats for some other
+  // character can't change this tree, so they don't trigger a reload.
+  ctx.events.on('CHAT_CREATED', p => {
+    const charId = p?.chat?.character_id
+    if (activeChatId && (!charId || !currentCharacterId || charId === currentCharacterId)) softRefresh(activeChatId)
+  })
+  // Chat deleted (e.g. from Lumiverse's chat list) → drop its branch, rather than
+  // leaving a node that switches to a chat that no longer exists.
+  ctx.events.on('CHAT_DELETED', p => { if (activeChatId && p?.id && findNodeByChat(p.id)) softRefresh(activeChatId) })
   // Message removed or edited → structure may change
   ctx.events.on('MESSAGE_DELETED', p => softRefresh(p.chatId))
   // Lumiverse emits this for edits, swipe selection and hide/unhide, plus a few
