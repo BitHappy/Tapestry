@@ -3342,7 +3342,7 @@ function setup(ctx) {
     dbg("Force reload…");
     roots = [];
     canvasWrap.innerHTML = `<div class="ctv-state"><div class="ctv-spinner"></div><span>Loading…</span></div>`;
-    requestTree({ type: "get_active_char_and_tree" });
+    requestTree({ type: "get_active_char_and_tree", reload: true });
   });
   dbg("Bootstrap: requesting active chat tree");
   requestTree({ type: "get_active_char_and_tree" });

@@ -21,6 +21,10 @@ interface MessageInfo {
   truncated?: boolean // preview/swipes were capped — full text is fetched on expand
   // swipe index → branches that fork from this message on that swipe.
   swipeBranches?: Record<number, Array<{ chatId: string; name: string; branchPath: string | null }>>
+  // A copy inherited from an ancestor, which draws it — sent without its text.
+  inherited?: boolean
+  // Branches whose inherited copy of this message was edited after branching.
+  editedIn?: Array<{ text: string; truncated: boolean; chats: Array<{ chatId: string; name: string; branchPath: string | null; messageId: string }> }>
 }
 
 interface BranchNode {
@@ -3910,7 +3914,7 @@ export function setup(ctx: SpindleFrontendContext) {
     dbg('Force reload…')
     roots = []
     canvasWrap.innerHTML = `<div class="ctv-state"><div class="ctv-spinner"></div><span>Loading…</span></div>`
-    requestTree({ type: 'get_active_char_and_tree' })
+    requestTree({ type: 'get_active_char_and_tree', reload: true })
   })
 
 

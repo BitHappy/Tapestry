@@ -52,6 +52,18 @@ interface MessageInfo {
   // the branches that fork here on a different one, and (on a tree's first
   // message) the character's other chats as separate trees.
   greetingVariants?: GreetingVariant[]
+  // A copy of a message this chat inherited from an ancestor. The map draws the
+  // ancestor's version, so a copy ships without its text (see trimInherited).
+  inherited?: boolean
+  // On a drawn message: the branches whose inherited copy of it now reads
+  // differently (edited after branching), grouped by what the copy says.
+  editedIn?: EditedCopy[]
+}
+
+interface EditedCopy {
+  text: string
+  truncated: boolean
+  chats: Array<{ chatId: string; name: string; branchPath: string | null; messageId: string }>
 }
 
 interface GreetingHub {
@@ -574,6 +586,68 @@ function breakParentLoops(
   }
 }
 
+// ── Message cache ───────────────────────────────────────────────────────────
+//
+// Building a tree reads every message of every chat the character has, and the
+// frontend asks for a fresh tree after each send, generation and swipe — so
+// without a cache, one message in a 200-chat library costs 200 reads, usually
+// twice. Almost all of those chats haven't changed since the last build.
+//
+// So raw messages are kept per chat and dropped whenever Lumiverse reports a
+// change to that chat. Lumiverse emits an event for every message write the
+// tree depends on (send, edit, delete, swipe, hide; chat deletion) — chat
+// `updated_at` can't be used instead, since edits and deletes don't bump it.
+// As a belt-and-braces measure the chat a tree is requested for is always read
+// fresh, and the reload button clears the whole cache.
+//
+// Only the most recently viewed characters are kept, to bound memory.
+const CACHE_CHARACTERS = 3;
+
+const msgCache = new Map<string, { raw: RawMessage[]; characterId: string }>();
+// Bumped on every invalidation. A read that started before the bump may hold
+// the old messages, so it isn't stored (the next build reads again).
+const cacheGen = new Map<string, number>();
+const recentCharacters: string[] = [];
+
+function invalidateChat(chatId: unknown) {
+  if (typeof chatId !== 'string' || !chatId) return;
+  msgCache.delete(chatId);
+  cacheGen.set(chatId, (cacheGen.get(chatId) ?? 0) + 1);
+}
+
+function forgetCharacter(characterId: string) {
+  for (const [chatId, entry] of msgCache) {
+    if (entry.characterId === characterId) invalidateChat(chatId);
+  }
+}
+
+// Mark a character as just viewed, evicting the least recent beyond the cap.
+function touchCharacter(characterId: string) {
+  const at = recentCharacters.indexOf(characterId);
+  if (at !== -1) recentCharacters.splice(at, 1);
+  recentCharacters.unshift(characterId);
+  while (recentCharacters.length > CACHE_CHARACTERS) forgetCharacter(recentCharacters.pop()!);
+}
+
+async function getMessagesCached(chatId: string, characterId: string, fresh = false): Promise<RawMessage[]> {
+  if (!fresh) {
+    const hit = msgCache.get(chatId);
+    if (hit) return hit.raw;
+  }
+  const gen = cacheGen.get(chatId) ?? 0;
+  const raw: RawMessage[] = await spindle.chat.getMessages(chatId);
+  // Only kept for characters being tracked, so eviction can find every entry.
+  if ((cacheGen.get(chatId) ?? 0) === gen && recentCharacters.includes(characterId)) {
+    msgCache.set(chatId, { raw, characterId });
+  }
+  return raw;
+}
+
+for (const ev of ['MESSAGE_SENT', 'MESSAGE_EDITED', 'MESSAGE_DELETED', 'MESSAGE_SWIPED', 'SWIPE_EDITED']) {
+  spindle.on(ev, (p: any) => invalidateChat(p?.chatId));
+}
+spindle.on('CHAT_DELETED', (p: any) => invalidateChat(p?.id));
+
 // `reqId` is the frontend's request number, echoed on every reply so it can
 // ignore replies to requests it has since superseded.
 async function handleGetTreeData(characterId: string, userId: string, preferChatId: string | null = null, reqId?: number) {
@@ -600,12 +674,13 @@ async function handleGetTreeData(characterId: string, userId: string, preferChat
     }
 
     // Load messages for every chat
+    touchCharacter(characterId);
     const messagesMap = new Map<string, MessageInfo[]>();
     // Raw messages kept alongside the trimmed previews so reconstruction can read
     // each message's `extra` (where imported ST branch pointers live).
     const rawByChat = new Map<string, RawMessage[]>();
     for (const chat of allChats) {
-      const raw = await spindle.chat.getMessages(chat.id);
+      const raw = await getMessagesCached(chat.id, characterId, chat.id === preferChatId);
       rawByChat.set(chat.id, raw);
       messagesMap.set(chat.id, raw.map((m: RawMessage, i: number) => {
         const swipeCount = m.swipe_dates?.length ?? 1;
@@ -722,9 +797,12 @@ async function handleGetTreeData(characterId: string, userId: string, preferChat
     //
     // So: attribute each branch to the nearest ancestor whose OWN unique section
     // actually contains the fork message, and number from that.
+    const parentOf = (cid: string): string | null => {
+      const p = chatById.get(cid)?.metadata?.branched_from;
+      return p && chatById.has(p) ? p : null;   // a deleted parent leaves a root
+    };
     const firstUniqueOf = (cid: string): number => {
-      const c = chatById.get(cid);
-      if (!c?.metadata?.branched_from) return 0;   // a root owns its whole history
+      if (!parentOf(cid)) return 0;   // a root owns its whole history
       return (forkIndexOf.get(cid) ?? 0) + 1;
     };
     const visualParentOf = (cid: string): string | null => {
@@ -810,6 +888,66 @@ async function handleGetTreeData(characterId: string, userId: string, preferChat
       };
     };
 
+    // ── Inherited copies ──────────────────────────────────────────────────────
+    // A branch holds its own copy of every message up to its fork, but the map
+    // draws each of those once, on the lane that owns it: the nearest ancestor
+    // whose own section holds it (the frontend's laneOwnerOf). So a copy only
+    // needs its id and position — its text is never shown, and shipping it made
+    // the payload grow with every branch (five branches forking at message 150
+    // sent 750 previews nobody sees).
+    //
+    // A copy CAN differ from the drawn message, though: edit an old message from
+    // inside a branch and only that branch's copy changes. Those are reported on
+    // the drawn message (editedIn) so the map can show it. A copy that continues
+    // on another of the message's swipes isn't an edit: it matches as long as its
+    // text is one of the drawn message's swipes. Greetings are left out — chats
+    // showing different greetings are already listed in greetingVariants.
+    const ownerOf = (cid: string, i: number): string | null => {
+      const seen = new Set<string>();
+      for (let c: string | null = cid; c && !seen.has(c); c = parentOf(c)) {
+        seen.add(c);
+        if (i >= firstUniqueOf(c)) return c;
+      }
+      return null;
+    };
+    const variantCache = new Map<string, Set<string>>();
+    const variantsOf = (cid: string, i: number): Set<string> => {
+      const k = `${cid}\u0000${i}`;
+      let set = variantCache.get(k);
+      if (!set) {
+        const raw = (rawByChat.get(cid) ?? [])[i];
+        const texts = raw?.swipes?.length ? raw.swipes : [raw?.content ?? ''];
+        set = new Set(texts.map(greetingKey));
+        variantCache.set(k, set);
+      }
+      return set;
+    };
+    const editGroups = new Map<string, EditedCopy>();
+    function trimInherited(cid: string, messages: MessageInfo[]): MessageInfo[] {
+      const first = firstUniqueOf(cid);
+      if (!first) return messages;
+      const raws = rawByChat.get(cid) ?? [];
+      return messages.map((m, i) => {
+        if (i >= first) return m;
+        const owner = ownerOf(cid, i);
+        const drawn = owner && owner !== cid ? (messagesMap.get(owner) ?? [])[i] : undefined;
+        if (!owner || !drawn) return m;   // nothing else draws it — keep it whole
+        const text = rawText(raws[i]?.content ?? '');
+        const key = greetingKey(text);
+        if (!isGreetingAt(owner, i) && !variantsOf(owner, i).has(key)) {
+          const gk = `${owner}\u0000${i}\u0000${key}`;
+          let group = editGroups.get(gk);
+          if (!group) {
+            group = { text: text.slice(0, PREVIEW_CAP), truncated: text.length > PREVIEW_CAP, chats: [] };
+            editGroups.set(gk, group);
+            (drawn.editedIn ??= []).push(group);
+          }
+          group.chats.push({ chatId: cid, name: chatById.get(cid)?.name || 'Branch', branchPath: branchPathOf.get(cid) ?? null, messageId: m.id });
+        }
+        return { id: m.id, index: m.index, role: m.role, preview: '', timestamp: m.timestamp, swipeCount: m.swipeCount, swipeId: m.swipeId, inherited: true };
+      });
+    }
+
     // Same visited-set guard as assignPaths — each chat is placed at most once.
     const placed = new Set<string>();
     function buildNode(chatId: string): BranchNode | null {
@@ -818,8 +956,8 @@ async function handleGetTreeData(characterId: string, userId: string, preferChat
       const chat = chatById.get(chatId);
       if (!chat) return null;
 
-      const messages = messagesMap.get(chatId) ?? [];
-      const parentId = chat.metadata?.branched_from ?? null;
+      const messages = trimInherited(chatId, messagesMap.get(chatId) ?? []);
+      const parentId = parentOf(chatId);
 
       const forkAtIndex: number | null = parentId ? (forkIndexOf.get(chatId) ?? null) : null;
 
@@ -905,6 +1043,8 @@ spindle.onFrontendMessage(async (payload: any, userId: string) => {
         spindle.sendToFrontend({ type: 'tree_no_active', reqId: payload.reqId }, userId);
         return;
       }
+      // The reload button: re-read everything, in case the cache missed a change.
+      if (payload.reload) forgetCharacter(activeChat.character_id);
       await handleGetTreeData(activeChat.character_id, userId, activeChat.id, payload.reqId);
       return;
     }
@@ -977,7 +1117,7 @@ spindle.onFrontendMessage(async (payload: any, userId: string) => {
       try {
         const chat = await spindle.chats.get(payload.chatId, userId);
         if (!chat) { fail('Chat not found'); return; }
-        const msgs = await spindle.chat.getMessages(payload.chatId);
+        const msgs = await getMessagesCached(payload.chatId, chat.character_id);
         const m = msgs.find((x: RawMessage) => x.id === payload.messageId);
         if (!m) { fail('Message not found'); return; }
         spindle.sendToFrontend({

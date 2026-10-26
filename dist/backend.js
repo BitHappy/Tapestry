@@ -329,6 +329,47 @@ function breakParentLoops(allChats, chatById, childrenOf, rootIds) {
     spindle.log.warn(`[tapestry] broke a parent loop: ${cutId} no longer branches from ${oldParent}`);
   }
 }
+var CACHE_CHARACTERS = 3;
+var msgCache = new Map;
+var cacheGen = new Map;
+var recentCharacters = [];
+function invalidateChat(chatId) {
+  if (typeof chatId !== "string" || !chatId)
+    return;
+  msgCache.delete(chatId);
+  cacheGen.set(chatId, (cacheGen.get(chatId) ?? 0) + 1);
+}
+function forgetCharacter(characterId) {
+  for (const [chatId, entry] of msgCache) {
+    if (entry.characterId === characterId)
+      invalidateChat(chatId);
+  }
+}
+function touchCharacter(characterId) {
+  const at = recentCharacters.indexOf(characterId);
+  if (at !== -1)
+    recentCharacters.splice(at, 1);
+  recentCharacters.unshift(characterId);
+  while (recentCharacters.length > CACHE_CHARACTERS)
+    forgetCharacter(recentCharacters.pop());
+}
+async function getMessagesCached(chatId, characterId, fresh = false) {
+  if (!fresh) {
+    const hit = msgCache.get(chatId);
+    if (hit)
+      return hit.raw;
+  }
+  const gen = cacheGen.get(chatId) ?? 0;
+  const raw = await spindle.chat.getMessages(chatId);
+  if ((cacheGen.get(chatId) ?? 0) === gen && recentCharacters.includes(characterId)) {
+    msgCache.set(chatId, { raw, characterId });
+  }
+  return raw;
+}
+for (const ev of ["MESSAGE_SENT", "MESSAGE_EDITED", "MESSAGE_DELETED", "MESSAGE_SWIPED", "SWIPE_EDITED"]) {
+  spindle.on(ev, (p) => invalidateChat(p?.chatId));
+}
+spindle.on("CHAT_DELETED", (p) => invalidateChat(p?.id));
 async function handleGetTreeData(characterId, userId, preferChatId = null, reqId) {
   try {
     let computeForkIndex2 = function(chatId) {
@@ -364,6 +405,32 @@ async function handleGetTreeData(characterId, userId, preferChatId = null, reqId
         branchPathOf.set(cid, path);
         assignPaths2(cid, false, path);
       });
+    }, trimInherited2 = function(cid, messages) {
+      const first = firstUniqueOf(cid);
+      if (!first)
+        return messages;
+      const raws = rawByChat.get(cid) ?? [];
+      return messages.map((m, i) => {
+        if (i >= first)
+          return m;
+        const owner = ownerOf(cid, i);
+        const drawn = owner && owner !== cid ? (messagesMap.get(owner) ?? [])[i] : undefined;
+        if (!owner || !drawn)
+          return m;
+        const text = rawText(raws[i]?.content ?? "");
+        const key = greetingKey(text);
+        if (!isGreetingAt(owner, i) && !variantsOf(owner, i).has(key)) {
+          const gk = `${owner}\x00${i}\x00${key}`;
+          let group = editGroups.get(gk);
+          if (!group) {
+            group = { text: text.slice(0, PREVIEW_CAP), truncated: text.length > PREVIEW_CAP, chats: [] };
+            editGroups.set(gk, group);
+            (drawn.editedIn ??= []).push(group);
+          }
+          group.chats.push({ chatId: cid, name: chatById.get(cid)?.name || "Branch", branchPath: branchPathOf.get(cid) ?? null, messageId: m.id });
+        }
+        return { id: m.id, index: m.index, role: m.role, preview: "", timestamp: m.timestamp, swipeCount: m.swipeCount, swipeId: m.swipeId, inherited: true };
+      });
     }, buildNode2 = function(chatId) {
       if (placed.has(chatId))
         return null;
@@ -371,8 +438,8 @@ async function handleGetTreeData(characterId, userId, preferChatId = null, reqId
       const chat = chatById.get(chatId);
       if (!chat)
         return null;
-      const messages = messagesMap.get(chatId) ?? [];
-      const parentId = chat.metadata?.branched_from ?? null;
+      const messages = trimInherited2(chatId, messagesMap.get(chatId) ?? []);
+      const parentId = parentOf(chatId);
       const forkAtIndex = parentId ? forkIndexOf.get(chatId) ?? null : null;
       const childIds = (childrenOf.get(chatId) ?? []).slice().sort(byCreated);
       const hub = new Map;
@@ -419,7 +486,7 @@ async function handleGetTreeData(characterId, userId, preferChatId = null, reqId
       const children = childIds.map((id) => buildNode2(id)).filter(Boolean);
       return { chatId, chatName: chat.name || "Chat", parentId, forkAtIndex, branchPath: branchPathOf.get(chatId) ?? null, messages, children };
     };
-    var computeForkIndex = computeForkIndex2, assignPaths = assignPaths2, buildNode = buildNode2;
+    var computeForkIndex = computeForkIndex2, assignPaths = assignPaths2, trimInherited = trimInherited2, buildNode = buildNode2;
     spindle.sendToFrontend({ type: "tree_loading", reqId }, userId);
     const allChats = [];
     for (let page = 0;page < 50; page++) {
@@ -439,10 +506,11 @@ async function handleGetTreeData(characterId, userId, preferChatId = null, reqId
       spindle.sendToFrontend({ type: "tree_data", reqId, characterId, roots: [] }, userId);
       return;
     }
+    touchCharacter(characterId);
     const messagesMap = new Map;
     const rawByChat = new Map;
     for (const chat of allChats) {
-      const raw = await spindle.chat.getMessages(chat.id);
+      const raw = await getMessagesCached(chat.id, characterId, chat.id === preferChatId);
       rawByChat.set(chat.id, raw);
       messagesMap.set(chat.id, raw.map((m, i) => {
         const swipeCount = m.swipe_dates?.length ?? 1;
@@ -504,9 +572,12 @@ async function handleGetTreeData(characterId, userId, preferChatId = null, reqId
     const forkIndexOf = new Map;
     for (const chat of allChats)
       forkIndexOf.set(chat.id, computeForkIndex2(chat.id));
+    const parentOf = (cid) => {
+      const p = chatById.get(cid)?.metadata?.branched_from;
+      return p && chatById.has(p) ? p : null;
+    };
     const firstUniqueOf = (cid) => {
-      const c = chatById.get(cid);
-      if (!c?.metadata?.branched_from)
+      if (!parentOf(cid))
         return 0;
       return (forkIndexOf.get(cid) ?? 0) + 1;
     };
@@ -568,6 +639,28 @@ async function handleGetTreeData(characterId, userId, preferChatId = null, reqId
         list: () => [...groups.values()].sort((a, b) => (a.greetingIndex ?? 1e9) - (b.greetingIndex ?? 1e9))
       };
     };
+    const ownerOf = (cid, i) => {
+      const seen = new Set;
+      for (let c = cid;c && !seen.has(c); c = parentOf(c)) {
+        seen.add(c);
+        if (i >= firstUniqueOf(c))
+          return c;
+      }
+      return null;
+    };
+    const variantCache = new Map;
+    const variantsOf = (cid, i) => {
+      const k = `${cid}\x00${i}`;
+      let set = variantCache.get(k);
+      if (!set) {
+        const raw = (rawByChat.get(cid) ?? [])[i];
+        const texts = raw?.swipes?.length ? raw.swipes : [raw?.content ?? ""];
+        set = new Set(texts.map(greetingKey));
+        variantCache.set(k, set);
+      }
+      return set;
+    };
+    const editGroups = new Map;
     const placed = new Set;
     const roots = rootIds.map((id) => buildNode2(id)).filter(Boolean);
     spindle.sendToFrontend({ type: "tree_data", reqId, characterId, roots }, userId);
@@ -595,6 +688,8 @@ spindle.onFrontendMessage(async (payload, userId) => {
         spindle.sendToFrontend({ type: "tree_no_active", reqId: payload.reqId }, userId);
         return;
       }
+      if (payload.reload)
+        forgetCharacter(activeChat.character_id);
       await handleGetTreeData(activeChat.character_id, userId, activeChat.id, payload.reqId);
       return;
     }
@@ -656,7 +751,7 @@ spindle.onFrontendMessage(async (payload, userId) => {
           fail("Chat not found");
           return;
         }
-        const msgs = await spindle.chat.getMessages(payload.chatId);
+        const msgs = await getMessagesCached(payload.chatId, chat.character_id);
         const m = msgs.find((x) => x.id === payload.messageId);
         if (!m) {
           fail("Message not found");
