@@ -188,6 +188,13 @@ function setup(ctx) {
     .ctv-tooltip-swipes { flex-shrink:0; padding:2px 9px; border-radius:999px; border:1px solid var(--lumiverse-primary-040,#6b63c0); background:var(--lumiverse-primary-015); color:var(--lumiverse-primary-text,#a9a0ff); font-size:10.5px; font-weight:600; font-family:inherit; cursor:pointer; white-space:nowrap; transition:all 120ms; }
     .ctv-tooltip-swipes:hover { background:var(--lumiverse-primary-040,#6b63c0); color:#fff; }
     .ctv-tooltip-swipes:active { transform:scale(0.97); }
+    /* Edited copies: amber, so they read apart from swipes (another version in a
+       different branch, not in this chat). */
+    .ctv-tooltip-swipes.ctv-tooltip-edits { border-color:rgba(245,184,77,0.55); background:rgba(245,184,77,0.12); color:#f5b84d; }
+    .ctv-tooltip-swipes.ctv-tooltip-edits:hover { background:rgba(245,184,77,0.85); color:#1a1825; }
+    .ctv-edit-badge { fill:#f5b84d; stroke:var(--lumiverse-bg,#13111c); stroke-width:1; pointer-events:none; }
+    .ctv-diff-add { background:rgba(91,201,142,0.24); color:inherit; text-decoration:none; border-radius:3px; }
+    .ctv-diff-del { background:rgba(232,109,109,0.22); color:inherit; text-decoration:line-through; opacity:0.8; border-radius:3px; }
     /* Swipe view header: a "‹ Back" button returns to the message preview. */
     .ctv-swipe-header { display:flex; align-items:center; gap:8px; margin-bottom:6px; }
     .ctv-swipe-header .ctv-tooltip-role { margin-bottom:0; }
@@ -375,6 +382,7 @@ function setup(ctx) {
   let pendingExpand = null;
   let tooltipNavAction = null;
   let tooltipSwipeAction = null;
+  let tooltipEditsAction = null;
   let tooltipCopyAction = null;
   let tooltipBranchAction = null;
   let tooltipTouchMode = false;
@@ -508,7 +516,7 @@ function setup(ctx) {
     });
   }
   const fullTextCache = new Map;
-  let fullTextWaiter = null;
+  const fullTextWaiters = new Map;
   const FULL_TEXT_TIMEOUT_MS = 1e4;
   function requestFullText(chatId, messageId, apply, fail = null) {
     if (!chatId || !messageId) {
@@ -520,23 +528,25 @@ function setup(ctx) {
       apply(cached);
       return;
     }
-    if (fullTextWaiter?.messageId === messageId) {
-      fullTextWaiter.applies.push(apply);
+    const pending = fullTextWaiters.get(messageId);
+    if (pending) {
+      pending.applies.push(apply);
       if (fail)
-        fullTextWaiter.fails.push(fail);
+        pending.fails.push(fail);
       return;
     }
-    clearTimeout(fullTextWaiter?.timer);
-    const waiter = { messageId, applies: [apply], fails: fail ? [fail] : [], timer: null };
-    waiter.timer = setTimeout(() => endFullTextWaiter(messageId, null), FULL_TEXT_TIMEOUT_MS);
-    fullTextWaiter = waiter;
+    fullTextWaiters.set(messageId, {
+      applies: [apply],
+      fails: fail ? [fail] : [],
+      timer: setTimeout(() => endFullTextWaiter(messageId, null), FULL_TEXT_TIMEOUT_MS)
+    });
     ctx.sendToBackend({ type: "get_full_message", chatId, messageId });
   }
   function endFullTextWaiter(messageId, entry) {
-    if (fullTextWaiter?.messageId !== messageId)
+    const waiter = fullTextWaiters.get(messageId);
+    if (!waiter)
       return;
-    const waiter = fullTextWaiter;
-    fullTextWaiter = null;
+    fullTextWaiters.delete(messageId);
     clearTimeout(waiter.timer);
     if (entry)
       for (const apply of waiter.applies)
@@ -602,7 +612,7 @@ function setup(ctx) {
   }
   function showMsgTooltip(anchorEl, msg, opts = {}) {
     greetingView = null;
-    const { onNavigate = null, openedByTouch = false, keepPosition = false, onSwipes = null, swipeCount = 0, chatId = null, onBranch = null, stepping = false } = opts;
+    const { onNavigate = null, openedByTouch = false, keepPosition = false, onSwipes = null, onEdits = null, swipeCount = 0, chatId = null, onBranch = null, stepping = false } = opts;
     const deskStep = stepping && !openedByTouch && !!deskPin;
     if (!stepping) {
       deskPin = null;
@@ -619,6 +629,7 @@ function setup(ctx) {
     pendingExpand = null;
     tooltipNavAction = onNavigate;
     tooltipSwipeAction = onSwipes;
+    tooltipEditsAction = onEdits;
     tooltipCopyAction = (btn) => copyMessageText(btn, chatId, msg);
     tooltipBranchAction = onBranch;
     tooltipTouchMode = openedByTouch;
@@ -642,6 +653,8 @@ function setup(ctx) {
       const jumpHint = onNavigate ? openedByTouch ? "" : "Click node to jump" : "Click node to jump";
       const hintText = [moreHint, jumpHint].filter(Boolean).join(" · ");
       const swipesBtn = onSwipes ? msg.greetingVariants ? `<button type="button" class="ctv-tooltip-swipes" title="View this character's greetings and the chats that use them">⇄ Greetings</button>` : `<button type="button" class="ctv-tooltip-swipes" title="View all swipes">⇄ ${swipeCount} swipes</button>` : "";
+      const editCount = (msg.editedIn ?? []).length;
+      const editsBtn = onEdits ? `<button type="button" class="ctv-tooltip-swipes ctv-tooltip-edits" title="This message was edited in another branch — compare the versions">✎ ${editCount} edit${editCount === 1 ? "" : "s"}</button>` : "";
       const actions = !onNavigate ? "" : openedByTouch ? `
       <div class="ctv-tooltip-actions">
         <button type="button" class="ctv-tooltip-arrow ctv-tooltip-prev" aria-label="Previous node"${hasPrev ? "" : " disabled"}>${ARROW_LEFT}</button>
@@ -659,6 +672,7 @@ function setup(ctx) {
       <div class="ctv-tooltip-rolerow">
         <div class="ctv-tooltip-role">${label} · msg ${msg.index + 1}</div>
         <div class="ctv-tooltip-rolerow-end">
+          ${editsBtn}
           ${swipesBtn}
           ${onNavigate && onBranch ? branchBtnHtml() : ""}
           ${onNavigate ? copyBtnHtml("Copy message") : ""}
@@ -846,6 +860,7 @@ function setup(ctx) {
       onNavigate: () => navigateToMessage(node.chatId, msg.id, msg.index),
       openedByTouch: lastPointerType === "touch",
       onSwipes: msg.greetingVariants ? () => showGreetingTooltip(anchorEl, node, msg) : isMultiSwipe ? () => showSwipeTooltip(anchorEl, node, msg) : null,
+      onEdits: msg.editedIn?.length ? () => showEditsTooltip(anchorEl, node, msg) : null,
       swipeCount: isMultiSwipe ? msg.swipes.length : 0,
       chatId: node.chatId,
       onBranch: msg.index === lastIdx ? null : () => branchOnSwipe(node.chatId, msg, msg.swipeId ?? 0),
@@ -933,6 +948,7 @@ function setup(ctx) {
     pendingExpand = null;
     tooltipNavAction = null;
     tooltipSwipeAction = null;
+    tooltipEditsAction = null;
     tooltipBranchAction = null;
     keyNavActive = false;
     deskPin = null;
@@ -957,6 +973,10 @@ function setup(ctx) {
   tooltip.addEventListener("mouseleave", scheduleHideTooltip);
   tooltip.addEventListener("click", (e) => {
     const target = e.target;
+    if (target.closest(".ctv-tooltip-edits")) {
+      tooltipEditsAction?.();
+      return;
+    }
     if (target.closest(".ctv-tooltip-swipes")) {
       tooltipSwipeAction?.();
       return;
@@ -1012,6 +1032,7 @@ function setup(ctx) {
     pendingExpand = null;
     tooltipNavAction = null;
     tooltipSwipeAction = null;
+    tooltipEditsAction = null;
     const docked = lastPointerType === "touch";
     tooltip.style.width = docked ? mobileDockWidth() + "px" : "330px";
     hoverAnchorEl = anchorEl;
@@ -1112,6 +1133,176 @@ function setup(ctx) {
       });
     }
   }
+  function diffHtml(base, text) {
+    const tokens = (t) => String(t).split(/(\s+|[^\s\p{L}\p{N}]+)/u).filter(Boolean);
+    const a = tokens(base), b = tokens(text);
+    let pre = 0;
+    while (pre < a.length && pre < b.length && a[pre] === b[pre])
+      pre++;
+    let suf = 0;
+    while (suf < a.length - pre && suf < b.length - pre && a[a.length - 1 - suf] === b[b.length - 1 - suf])
+      suf++;
+    const A = a.slice(pre, a.length - suf), B = b.slice(pre, b.length - suf);
+    const n = A.length, m = B.length;
+    if ((n + 1) * (m + 1) > 1e6)
+      return escHtml(text);
+    const lcs = Array.from({ length: n + 1 }, () => new Uint32Array(m + 1));
+    for (let i = n - 1;i >= 0; i--) {
+      for (let j = m - 1;j >= 0; j--) {
+        lcs[i][j] = A[i] === B[j] ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+      }
+    }
+    const out = [escHtml(a.slice(0, pre).join(""))];
+    let added = "", removed = "";
+    const flush = () => {
+      if (removed)
+        out.push(`<del class="ctv-diff-del">${escHtml(removed)}</del>`);
+      if (added)
+        out.push(`<ins class="ctv-diff-add">${escHtml(added)}</ins>`);
+      added = removed = "";
+    };
+    for (let i = 0, j = 0;i < n || j < m; ) {
+      if (i < n && j < m && A[i] === B[j]) {
+        flush();
+        out.push(escHtml(A[i]));
+        i++;
+        j++;
+      } else if (j < m && (i >= n || lcs[i][j + 1] >= lcs[i + 1][j]))
+        added += B[j++];
+      else
+        removed += A[i++];
+    }
+    flush();
+    out.push(escHtml(a.slice(a.length - suf).join("")));
+    return out.join("");
+  }
+  function showEditsTooltip(anchorEl, node, msg) {
+    greetingView = null;
+    clearTimeout(hoverExpandTimer);
+    hoverExpandTimer = null;
+    clearTimeout(hideTimer);
+    hideTimer = null;
+    resetTooltipMorph();
+    tooltip.classList.remove("expanded");
+    tooltip.classList.remove("expandable");
+    tooltip.classList.add("interactive");
+    pendingExpand = null;
+    tooltipNavAction = null;
+    tooltipSwipeAction = null;
+    tooltipEditsAction = null;
+    const docked = lastPointerType === "touch";
+    tooltip.style.width = docked ? mobileDockWidth() + "px" : "330px";
+    hoverAnchorEl = anchorEl;
+    clearNodePeek();
+    if (docked && anchorEl?.classList?.contains("ctv-node")) {
+      anchorEl.classList.add("ctv-node-peek");
+    }
+    const label = msg.role === "user" ? "User" : msg.role === "assistant" ? "AI" : "System";
+    const groups = msg.editedIn ?? [];
+    const texts = [msg.preview || "", ...groups.map((g) => g.text || "")];
+    let currentRow = -1;
+    if (activeChatId) {
+      const gi = groups.findIndex((g) => g.chats.some((c) => c.chatId === activeChatId));
+      if (gi !== -1)
+        currentRow = gi + 1;
+      else if ((findNodeByChat(activeChatId)?.messages.length ?? 0) > msg.index && laneOwnerOf(activeChatId, msg.index) === node.chatId)
+        currentRow = 0;
+    }
+    const rowHtml = (k) => {
+      const g = groups[k - 1];
+      const dests = k === 0 ? [`<button class="ctv-swipe-act go" data-row="0">→ ${escHtml(truncate(branchLabel(node.chatName, node.branchPath), 22))}</button>`] : g.chats.map((c) => `<button class="ctv-swipe-act go" data-row="${k}" data-dest-chat="${escHtml(c.chatId)}" data-dest-msg="${escHtml(c.messageId)}">→ ${escHtml(truncate(branchLabel(c.name, c.branchPath), 22))}</button>`);
+      const title = k === 0 ? "On the map" : `Edited in ${g.chats.length} branch${g.chats.length === 1 ? "" : "es"}`;
+      return `
+        <div class="ctv-swipe-row${k === currentRow ? " active" : ""}" data-row="${k}">
+          <div class="ctv-swipe-head" title="Click to expand the text">
+            <span class="ctv-swipe-caret"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M3.5 2.5 L8 5 L3.5 7.5 Z"/></svg></span>
+            <span class="ctv-swipe-num">${title}${k === currentRow ? " · current" : ""}</span>
+            ${copyBtnHtml("Copy this version", ` data-row="${k}"`)}
+          </div>
+          <div class="ctv-swipe-text"></div>
+          <div class="ctv-swipe-actions">${dests.join("")}</div>
+        </div>`;
+    };
+    tooltip.innerHTML = `
+      <div class="ctv-swipe-header">
+        <button type="button" class="ctv-swipe-back" title="Back to message preview">‹ Back</button>
+        <div class="ctv-tooltip-role">${label} · msg ${msg.index + 1} · ✎ ${groups.length} edited</div>
+      </div>
+      <div class="ctv-swipe-list">${texts.map((_, k) => rowHtml(k)).join("")}</div>
+      <div class="ctv-tooltip-hint">Highlights show what changed from the map's version · → opens that branch</div>
+    `;
+    const rowEls = Array.from(tooltip.querySelectorAll(".ctv-swipe-row"));
+    const paint = (k) => {
+      const el = rowEls[k]?.querySelector(".ctv-swipe-text");
+      if (!el)
+        return;
+      el.innerHTML = k === 0 ? escHtml(texts[0] || "(empty)") : diffHtml(texts[0], texts[k] || "");
+    };
+    texts.forEach((_, k) => paint(k));
+    tooltip.querySelector(".ctv-swipe-back")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      showMsgTooltip(anchorEl, msg, nodeTooltipOpts(anchorEl, node, msg));
+    });
+    tooltip.querySelectorAll(".ctv-swipe-head").forEach((head) => {
+      head.addEventListener("click", (e) => {
+        e.stopPropagation();
+        head.closest(".ctv-swipe-row")?.classList.toggle("expanded");
+      });
+    });
+    tooltip.querySelectorAll(".ctv-swipe-head .ctv-copy-btn").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const k = parseInt(btn.getAttribute("data-row") || "0", 10);
+        if (k === 0) {
+          copyMessageText(btn, node.chatId, msg);
+          return;
+        }
+        const g = groups[k - 1];
+        if (!g.truncated) {
+          copyTextWithFeedback(btn, g.text);
+          return;
+        }
+        requestFullText(g.chats[0].chatId, g.chats[0].messageId, (entry) => copyTextWithFeedback(btn, entry.content ?? ""), () => flashCopyResult(btn, false));
+      });
+    });
+    tooltip.querySelectorAll(".ctv-swipe-act").forEach((btn) => {
+      const destChat = btn.getAttribute("data-dest-chat");
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        hideMsgTooltip();
+        if (destChat)
+          navigateToMessage(destChat, btn.getAttribute("data-dest-msg"), msg.index);
+        else
+          navigateToMessage(node.chatId, msg.id, msg.index);
+      });
+      if (destChat) {
+        btn.addEventListener("mouseenter", () => setBranchHighlight(destChat, true));
+        btn.addEventListener("mouseleave", () => setBranchHighlight(destChat, false));
+      } else {
+        btn.addEventListener("mouseenter", () => anchorEl.classList.add("ctv-branch-hl"));
+        btn.addEventListener("mouseleave", () => anchorEl.classList.remove("ctv-branch-hl"));
+      }
+    });
+    tooltip.style.display = "block";
+    tooltip.querySelectorAll(".ctv-swipe-actions").forEach(packActionRows);
+    positionTooltip(anchorEl, docked, false);
+    const stillOpen = () => hoverAnchorEl === anchorEl && !!rowEls[0]?.isConnected;
+    const fill = (k, chatId, messageId) => requestFullText(chatId, messageId, (entry) => {
+      if (!stillOpen() || !entry.content)
+        return;
+      texts[k] = entry.content;
+      if (k === 0)
+        texts.forEach((_, j) => paint(j));
+      else
+        paint(k);
+    });
+    if (msg.truncated)
+      fill(0, node.chatId, msg.id);
+    groups.forEach((g, i) => {
+      if (g.truncated)
+        fill(i + 1, g.chats[0].chatId, g.chats[0].messageId);
+    });
+  }
   const cardGreetings = new Map;
   function loadCardGreetings(characterId) {
     if (!cardGreetings.has(characterId)) {
@@ -1135,6 +1326,7 @@ function setup(ctx) {
     pendingExpand = null;
     tooltipNavAction = null;
     tooltipSwipeAction = null;
+    tooltipEditsAction = null;
     const docked = lastPointerType === "touch";
     tooltip.style.width = docked ? mobileDockWidth() + "px" : "330px";
     hoverAnchorEl = anchorEl;
@@ -2115,6 +2307,8 @@ function setup(ctx) {
           pillLabel.style.pointerEvents = "none";
           pillLabel.textContent = String(seg.msgs.length);
           const first = seg.msgs[0], last = seg.msgs[seg.msgs.length - 1];
+          const editedInPill = seg.msgs.filter((m) => m.editedIn?.length).length;
+          const editedNote = editedInPill ? `<div class="ctv-tooltip-meta" style="color:#f5b84d">✎ ${editedInPill} edited in another branch</div>` : "";
           const tsFirst = first.timestamp ? new Date(first.timestamp * 1000).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
           const tsLast = last.timestamp ? new Date(last.timestamp * 1000).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
           const doExpandPill = () => {
@@ -2133,6 +2327,7 @@ function setup(ctx) {
             showSimpleTooltip(pill, `
               <div class="ctv-tooltip-role">${seg.msgs.length} messages</div>
               ${tsFirst ? `<div class="ctv-tooltip-meta">${tsFirst} → ${tsLast}</div>` : ""}
+              ${editedNote}
               <div class="ctv-tooltip-hint">Click to expand</div>
             `);
           });
@@ -2150,6 +2345,7 @@ function setup(ctx) {
             longPress: () => showSimpleTooltip(pill, `
               <div class="ctv-tooltip-role">${seg.msgs.length} messages</div>
               ${tsFirst ? `<div class="ctv-tooltip-meta">${tsFirst} → ${tsLast}</div>` : ""}
+              ${editedNote}
               <div class="ctv-tooltip-hint">Tap the pill to expand</div>
             `)
           });
@@ -2165,17 +2361,20 @@ function setup(ctx) {
           }
           svg.appendChild(pill);
           svg.appendChild(pillLabel);
-          if (branchSlide) {
-            slideEls.push(pill);
-            slideEls.push(pillLabel);
-          } else if (isCollapsedBranch) {
-            if (pCx > animPill.pivotCoord + 1) {
-              slideEls.push(pill);
-              slideEls.push(pillLabel);
-            } else {
-              fadeinEls.push(pill);
-              fadeinEls.push(pillLabel);
-            }
+          const pillEls = [pill, pillLabel];
+          if (editedInPill) {
+            const corner = orientation === "vertical" ? nc(bc + PCROSS / 2 - 3, pStart + 3) : nc(bc - PCROSS / 2 + 3, pStart + pLen - 3);
+            const badge = editBadge(corner.x, corner.y, 0);
+            svg.appendChild(badge);
+            pillEls.push(badge);
+          }
+          if (branchSlide)
+            slideEls.push(...pillEls);
+          else if (isCollapsedBranch) {
+            if (pCx > animPill.pivotCoord + 1)
+              slideEls.push(...pillEls);
+            else
+              fadeinEls.push(...pillEls);
           }
           continue;
         }
@@ -2246,6 +2445,19 @@ function setup(ctx) {
                 fadeinEls.push(dot);
             } else if (isCollapsedBranch && msgAxis > animPill.pivotCoord)
               slideEls.push(dot);
+          }
+          if (msg.editedIn?.length) {
+            const badge = editBadge(pt.x, pt.y, r);
+            svg.appendChild(badge);
+            if (branchSlide)
+              slideEls.push(badge);
+            else if (isExpandedBranch) {
+              if (msgAxis > animPill.pivotCoord + animPill.delta)
+                slideEls.push(badge);
+              else if (msgAxis > animPill.pivotCoord)
+                fadeinEls.push(badge);
+            } else if (isCollapsedBranch && msgAxis > animPill.pivotCoord)
+              slideEls.push(badge);
           }
         }
       }
@@ -2426,6 +2638,10 @@ function setup(ctx) {
     key.innerHTML = `
       <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><circle cx="5" cy="5" r="4" fill="currentColor"/></svg><span>AI</span>
       <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><circle cx="5" cy="5" r="4" fill="currentColor" fill-opacity="0.45"/></svg><span>You</span>`;
+    if (allBranches.some((lb) => lb.node.messages.some((m) => m.editedIn?.length))) {
+      key.title += " · amber corner: edited in another branch";
+      key.insertAdjacentHTML("beforeend", `<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><circle cx="5" cy="5" r="3.2" fill="#f5b84d"/></svg><span>Edited</span>`);
+    }
     target.appendChild(key);
     for (const el of staticEls)
       target.appendChild(el);
@@ -3360,6 +3576,15 @@ function setup(ctx) {
     const g = Math.round((n >> 8 & 255) * f);
     const b = Math.round((n & 255) * f);
     return `rgb(${r},${g},${b})`;
+  }
+  function editBadge(x, y, r) {
+    const badge = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    const off = r * 0.8;
+    badge.setAttribute("cx", String(x + off));
+    badge.setAttribute("cy", String(y - off));
+    badge.setAttribute("r", "3.2");
+    badge.classList.add("ctv-edit-badge");
+    return badge;
   }
   function truncate(s, n) {
     return s.length > n ? s.slice(0, n - 1) + "…" : s;
