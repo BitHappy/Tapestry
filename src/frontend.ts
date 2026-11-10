@@ -243,11 +243,12 @@ export function setup(ctx: SpindleFrontendContext) {
     .ctv-tooltip-swipes { flex-shrink:0; padding:2px 9px; border-radius:999px; border:1px solid var(--lumiverse-primary-040,#6b63c0); background:var(--lumiverse-primary-015); color:var(--lumiverse-primary-text,#a9a0ff); font-size:10.5px; font-weight:600; font-family:inherit; cursor:pointer; white-space:nowrap; transition:all 120ms; }
     .ctv-tooltip-swipes:hover { background:var(--lumiverse-primary-040,#6b63c0); color:#fff; }
     .ctv-tooltip-swipes:active { transform:scale(0.97); }
-    /* Versions that differ between branches: amber, so they read apart from swipes
-       (another version in a different branch, not in this chat). */
-    .ctv-tooltip-swipes.ctv-tooltip-edits { border-color:rgba(245,184,77,0.55); background:rgba(245,184,77,0.12); color:#f5b84d; }
-    .ctv-tooltip-swipes.ctv-tooltip-edits:hover { background:rgba(245,184,77,0.85); color:#1a1825; }
-    .ctv-edit-badge { fill:#f5b84d; stroke:var(--lumiverse-bg,#13111c); stroke-width:1; pointer-events:none; }
+    /* A side node's "Changes" toggle, lit while the changes are shown. */
+    .ctv-tooltip-swipes.ctv-tooltip-changes.on { background:var(--lumiverse-primary-040,#6b63c0); color:#fff; }
+    /* Hovering a side node traces the branches that hold its version — a softer
+       take on the white glow of your own path. */
+    .ctv-node.ctv-trace, .ctv-pill.ctv-trace { stroke:rgba(255,255,255,0.8); stroke-width:2.2; filter:drop-shadow(0 0 4px rgba(255,255,255,0.6)); }
+    path.ctv-version-path.ctv-trace { opacity:1; stroke-width:2; }
     .ctv-diff-add { background:rgba(91,201,142,0.24); color:inherit; text-decoration:none; border-radius:3px; }
     /* ── Bookmarks ── */
     .ctv-bookmark-ribbon { fill:#ff8fab; stroke:var(--lumiverse-bg,#13111c); stroke-width:0.8; pointer-events:none; }
@@ -506,7 +507,7 @@ export function setup(ctx: SpindleFrontendContext) {
   let pendingExpand: (() => void) | null = null  // runs the hold-to-expand early (e.g. when the pointer reaches the tooltip)
   let tooltipNavAction: (() => void) | null = null  // navigation fired by the tooltip's "→ Go to this message" button
   let tooltipSwipeAction: (() => void) | null = null  // opens the swipe list from the preview's "🔄 N swipes" button
-  let tooltipEditsAction: (() => void) | null = null  // opens the versions list from the preview's "✎ N versions" button
+  let tooltipChangesAction: ((btn: HTMLElement) => void) | null = null  // a side node's "✎ Changes" toggle
   let tooltipCopyAction: ((btn: HTMLElement) => void) | null = null  // copies the previewed message's full text
   let tooltipBranchAction: (() => void) | null = null  // "new branch" from the previewed message (null at a branch tip)
   let tooltipTouchMode = false   // whether the open preview is the touch (docked) layout
@@ -798,14 +799,13 @@ export function setup(ctx: SpindleFrontendContext) {
 
   // Show a message tooltip glued to its node: a short preview first, then after
   // a short hold the full text in a scrollable box you can move onto and read.
-  // `opts.shown` swaps in another version of the message to display (and copy):
-  // your own chat's edited copy of a node on the highlighted path.
-  function showMsgTooltip(anchorEl, drawnMsg, opts: any = {}) {
+  // `opts.version` marks a side node (a version some branches hold instead of
+  // the lane's): its preview names those branches and can show what differs.
+  function showMsgTooltip(anchorEl, msg, opts: any = {}) {
     greetingView = null
-    const { onNavigate = null, openedByTouch = false, keepPosition = false, onSwipes = null, onEdits = null, swipeCount = 0, onBranch = null, stepping = false, shown = null, bookmarkTarget = null } = opts
-    lastMsgTooltip = { anchorEl, drawnMsg, opts }
-    const msg = shown?.msg ?? drawnMsg
-    const chatId = shown?.chatId ?? opts.chatId ?? null
+    const { onNavigate = null, openedByTouch = false, keepPosition = false, onSwipes = null, swipeCount = 0, onBranch = null, stepping = false, bookmarkTarget = null, version = null } = opts
+    lastMsgTooltip = { anchorEl, drawnMsg: msg, opts }
+    const chatId = opts.chatId ?? null
     // Desktop ◀ ▶ / arrow-key stepping: open straight into the full view at a
     // frozen spot (deskPin) instead of re-anchoring beside the new node.
     const deskStep = stepping && !openedByTouch && !!deskPin
@@ -823,7 +823,6 @@ export function setup(ctx: SpindleFrontendContext) {
     pendingExpand = null
     tooltipNavAction = onNavigate
     tooltipSwipeAction = onSwipes
-    tooltipEditsAction = onEdits
     tooltipCopyAction = (btn) => copyMessageText(btn, chatId, msg)
     tooltipBranchAction = onBranch
     tooltipTouchMode = openedByTouch
@@ -848,10 +847,41 @@ export function setup(ctx: SpindleFrontendContext) {
     const hasNext = !!onNavigate && !!adjacentNodeCircle(anchorEl, 1)
 
     const label = msg.role === 'user' ? 'User' : msg.role === 'assistant' ? 'AI' : 'System'
-    const searchNote = searchNoteFor(anchorEl, drawnMsg, shown?.chats ?? [])
+    const searchNote = searchNoteFor(anchorEl, msg)
     const ts = msg.timestamp
       ? new Date(msg.timestamp * 1000).toLocaleString(undefined, { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' })
       : ''
+    // Where this version lives: on a side node, the branches holding it; on a
+    // lane node with side nodes beside it, which branches differ.
+    const versionNote = version
+      ? `<div class="ctv-tooltip-meta" style="color:${version.color}">⎇ Version in ${escHtml(version.chats.map(chatLabel).join(', '))}</div>`
+      : msg.editedIn?.length
+        ? `<div class="ctv-tooltip-meta">⎇ Different in ${escHtml(msg.editedIn.flatMap(g => g.chats.map(c => chatLabel(c.chatId))).join(', '))} — see the node${msg.editedIn.length > 1 ? 's' : ''} beside it</div>`
+        : ''
+    // Changes view (side nodes): the whole text, marked against the lane's
+    // version. Both sides are swapped for their full text when it arrives.
+    let showChanges = false
+    let shownText = ''
+    let verFull = msg.preview || '', baseFull = version?.base?.preview || ''
+    const previewHtml = (text) => {
+      shownText = text
+      return showChanges ? diffHtml(baseFull, verFull) : markTerms(text)
+    }
+    const repaintPreview = () => {
+      const pv = tooltip.querySelector('.ctv-tooltip-preview')
+      if (pv && hoverAnchorEl === anchorEl) pv.innerHTML = previewHtml(shownText)
+    }
+    tooltipChangesAction = version ? (btn) => {
+      showChanges = !showChanges
+      btn.classList.toggle('on', showChanges)
+      if (showChanges) {
+        pendingExpand?.()
+        if (version.base.truncated) requestFullText(version.base.chatId, version.base.id, (e) => { baseFull = e.content ?? baseFull; repaintPreview() })
+        if (msg.truncated) requestFullText(chatId, msg.id, (e) => { verFull = e.content ?? verFull; repaintPreview() })
+      }
+      repaintPreview()
+    } : null
+
     const SHORT = 200
     const isLong = (msg.preview || '').length > SHORT
     const shortText = isLong ? msg.preview.slice(0, SHORT) + '…' : (msg.preview || '(empty)')
@@ -870,10 +900,9 @@ export function setup(ctx: SpindleFrontendContext) {
             ? `<button type="button" class="ctv-tooltip-swipes" title="View this character's greetings and the chats that use them">⇄ Greetings</button>`
             : `<button type="button" class="ctv-tooltip-swipes" title="View all swipes">⇄ ${swipeCount} swipes</button>`)
         : ''
-      // Branches hold different versions of it: "✎ N versions" opens the list.
-      const versionCount = (msg.editedIn ?? []).length + 1
-      const editsBtn = onEdits
-        ? `<button type="button" class="ctv-tooltip-swipes ctv-tooltip-edits" title="Branches have different versions of this message — compare them">✎ ${versionCount} versions</button>`
+      // A side node: "Changes" swaps the text for what differs from the lane's version.
+      const changesBtn = version
+        ? `<button type="button" class="ctv-tooltip-swipes ctv-tooltip-changes${showChanges ? ' on' : ''}" title="Show what differs from the version on the main line">✎ Changes</button>`
         : ''
       // Touch: big arrows flanking a large button, sized for thumbs. Desktop: the
       // compact pill with a small ◀ ▶ pair beside it (clicking one also arms the
@@ -897,17 +926,17 @@ export function setup(ctx: SpindleFrontendContext) {
       <div class="ctv-tooltip-rolerow">
         <div class="ctv-tooltip-role">${label} · msg ${msg.index + 1}</div>
         <div class="ctv-tooltip-rolerow-end">
-          ${editsBtn}
+          ${changesBtn}
           ${swipesBtn}
           ${onNavigate && bookmarkTarget ? bookmarkBtnHtml(!!findBookmark(bookmarkTarget), bm.ready) : ''}
           ${onNavigate && onBranch ? branchBtnHtml() : ''}
           ${onNavigate ? copyBtnHtml('Copy message') : ''}
         </div>
       </div>
-      ${onNavigate && bookmarkTarget ? bookmarkRowsFor(anchorEl, drawnMsg, bookmarkTarget) : ''}
-      <div class="ctv-tooltip-preview">${markTerms(text)}</div>
+      ${onNavigate && bookmarkTarget ? bookmarkRowsFor(anchorEl, msg, bookmarkTarget) : ''}
+      <div class="ctv-tooltip-preview">${previewHtml(text)}</div>
       ${searchNote}
-      ${shown ? `<div class="ctv-tooltip-meta" style="color:#f5b84d">✎ Your branch's version — other branches differ</div>` : ''}
+      ${versionNote}
       ${ts ? `<div class="ctv-tooltip-meta">${ts}</div>` : ''}
       ${hintText ? `<div class="ctv-tooltip-hint">${hintText}</div>` : ''}
       ${actions}
@@ -928,9 +957,9 @@ export function setup(ctx: SpindleFrontendContext) {
       if (!msg.truncated) return
       requestFullText(chatId, msg.id, (entry) => {
         if (hoverAnchorEl !== anchorEl || !tooltip.classList.contains('expanded')) return
-        if ((anchorEl as any)?._msg && (anchorEl as any)._msg !== drawnMsg) return
+        if ((anchorEl as any)?._msg && (anchorEl as any)._msg !== msg) return
         const pv = tooltip.querySelector('.ctv-tooltip-preview')
-        if (pv && entry.content) pv.innerHTML = markTerms(entry.content)
+        if (pv && entry.content) { verFull = entry.content; pv.innerHTML = previewHtml(entry.content) }
       })
     }
 
@@ -1123,9 +1152,9 @@ export function setup(ctx: SpindleFrontendContext) {
   //
   // A node on the highlighted path but drawn on an ancestor's lane is, for you,
   // your own chat's copy of that message — so jumping and branching act on that
-  // copy (you stay in your chat), and if you edited it after branching, the
-  // preview shows your version.
+  // copy, and you stay in your chat.
   function nodeTooltipOpts(anchorEl, node, msg, extra: any = {}) {
+    if (anchorEl?._version) return versionTooltipOpts(anchorEl._version, extra)
     const isMultiSwipe = (msg.swipeCount ?? 1) > 1 && !!msg.swipes && msg.swipes.length > 1
     const mine = activeCopyOf(node, msg)
     const from = mine ? findNodeByChat(mine.chatId) : node
@@ -1137,7 +1166,6 @@ export function setup(ctx: SpindleFrontendContext) {
       openedByTouch: lastPointerType === 'touch',
       onSwipes: msg.greetingVariants ? () => showGreetingTooltip(anchorEl, node, msg)
         : isMultiSwipe ? () => showSwipeTooltip(anchorEl, node, msg) : null,
-      onEdits: msg.editedIn?.length ? () => showEditsTooltip(anchorEl, node, msg) : null,
       swipeCount: isMultiSwipe ? msg.swipes.length : 0,
       chatId: node.chatId,
       bookmarkTarget: mine
@@ -1146,24 +1174,101 @@ export function setup(ctx: SpindleFrontendContext) {
       onBranch: msg.index === lastIdx ? null
         : mine ? () => branchOnSwipe(mine.chatId, mine.copy, mine.copy.swipeId ?? 0)
         : () => branchOnSwipe(node.chatId, msg, msg.swipeId ?? 0),
-      shown: mine?.edited ? {
-        chatId: mine.chatId,
-        chats: mine.edited.chats.map(c => c.chatId),
-        msg: { ...msg, id: mine.copy.id, preview: mine.edited.text, truncated: mine.edited.truncated, swipes: undefined, swipeCount: 1 },
-      } : null,
+      ...extra,
+    }
+  }
+
+  // A side node's preview (see drawVersions). Its actions act on the copy in the
+  // chat you're in when that's one of the branches holding this version, else
+  // on the branch whose column it's drawn in.
+  function versionTooltipOpts(v, extra: any = {}) {
+    const target = v.chats.includes(activeChatId) ? activeChatId : v.rep
+    const chat = findNodeByChat(target)
+    const copy = chat?.messages?.[v.index]
+    const lastIdx = (chat?.messages.length ?? 0) - 1
+    return {
+      onNavigate: () => navigateToMessage(target, copy?.id ?? null, v.index),
+      openedByTouch: lastPointerType === 'touch',
+      onSwipes: null,
+      swipeCount: 0,
+      chatId: v.rep,   // the shown text is the rep's copy (every holder's is the same)
+      bookmarkTarget: copy ? { chatId: target, messageId: copy.id, index: v.index } : null,
+      onBranch: !copy || v.index === lastIdx ? null : () => branchOnSwipe(target, copy, copy.swipeId ?? 0),
+      version: v,
       ...extra,
     }
   }
 
   // Your chat's own copy of a message drawn on an ancestor's lane, when your
-  // chat's history runs through it (the highlighted path); with `edited`, the
-  // edited version your copy shows. Null off your path or on your own lane.
+  // chat's history runs through that node (the highlighted path). Null off your
+  // path, on your own lane, or where your chat holds a different version (that
+  // has its own side node).
   function activeCopyOf(node, msg) {
     if (!activeChatId || activeChatId === node.chatId) return null
     const copy = findNodeByChat(activeChatId)?.messages?.[msg.index]
-    if (!copy?.id || laneOwnerOf(activeChatId, msg.index) !== node.chatId) return null
-    const edited = msg.editedIn?.find(g => g.chats.some(c => c.chatId === activeChatId)) ?? null
-    return { chatId: activeChatId, copy, edited }
+    if (!copy?.id || drawnAt(activeChatId, msg.index) !== node.chatId) return null
+    return { chatId: activeChatId, copy }
+  }
+
+  // ── Differing versions ────────────────────────────────────────────────────
+  // A message some branches hold in a different version than the lane that
+  // draws it (an old message edited after branching, on either side) gets that
+  // version drawn as a side node: once per distinct text, in the left-most
+  // column of the branches holding it (top-most in the sideways layout). Every
+  // holder's history runs along the lane there, so each can detour through it.
+  //
+  // Lane positions depend on the sort mode, so they're worked out per tree and
+  // cached until the tree data or the mode changes.
+  let laneIndexCache = { roots: null as any, mode: '', map: new Map<string, number>() }
+  function laneIndexOf(chatId) {
+    if (laneIndexCache.roots !== roots || laneIndexCache.mode !== sortMode) {
+      const map = new Map<string, number>()
+      for (const r of roots) for (const lb of flattenLayout(assignLanes(r, { n: 0 }, new Map(), sortMode))) map.set(lb.node.chatId, lb.lane)
+      laneIndexCache = { roots, mode: sortMode, map }
+    }
+    return laneIndexCache.map.get(chatId) ?? Infinity
+  }
+
+  // The branch whose column draws a version: the left-most one holding it.
+  function versionRep(group) {
+    let rep = null, best = Infinity
+    for (const c of group.chats) {
+      const lane = laneIndexOf(c.chatId)
+      if (lane < best) { best = lane; rep = c.chatId }
+    }
+    return rep
+  }
+
+  // The column that draws message `index` of `chatId`'s history: the side node
+  // of its version when its copy differs, else the lane that owns the message.
+  function drawnAt(chatId, index) {
+    const lane = laneOwnerOf(chatId, index)
+    if (!lane || lane === chatId) return lane
+    const group = findNodeByChat(lane)?.messages[index]?.editedIn?.find(g => g.chats.some(c => c.chatId === chatId))
+    return group ? (versionRep(group) ?? lane) : lane
+  }
+
+  // Softly light every node along the histories of `chatIds` — a side node's
+  // holders — so you can see which branches share that version.
+  function traceChats(svg, chatIds) {
+    clearTrace()
+    for (const cid of chatIds) {
+      const n = findNodeByChat(cid)
+      if (!n) continue
+      for (let i = 0; i < n.messages.length; i++) {
+        const lane = drawnAt(cid, i)
+        if (!lane) continue
+        const el = svg.querySelector(`circle.ctv-node[data-node-chat="${CSS.escape(lane)}"][data-node-idx="${i}"]`)
+          ?? (Array.from(svg.querySelectorAll(`.ctv-pill[data-pill-chat="${CSS.escape(lane)}"]`)) as any[]).find(p => (p._pillMsgs ?? []).some(m => m.index === i))
+        el?.classList.add('ctv-trace')
+      }
+    }
+    svg.querySelectorAll('.ctv-version-path').forEach((p: any) => {
+      if ((p._chats ?? []).some(c => chatIds.includes(c))) p.classList.add('ctv-trace')
+    })
+  }
+  function clearTrace() {
+    document.querySelectorAll('.ctv-trace').forEach(el => el.classList.remove('ctv-trace'))
   }
 
   // The lane that draws message `index` of `chatId`'s history: the chat itself
@@ -1188,9 +1293,11 @@ export function setup(ctx: SpindleFrontendContext) {
   function stepTrackFor(circle) {
     const node = circle?._node, msg = circle?._msg
     if (!node || !msg) return null
+    // A side node: your chat if it holds this version, else the column's branch.
+    if (circle._version) return circle._version.chats.includes(activeChatId) ? activeChatId : node.chatId
     if (activeChatId) {
       const active = findNodeByChat(activeChatId)
-      if (active && msg.index < active.messages.length && laneOwnerOf(activeChatId, msg.index) === node.chatId) {
+      if (active && msg.index < active.messages.length && drawnAt(activeChatId, msg.index) === node.chatId) {
         return activeChatId
       }
     }
@@ -1216,7 +1323,7 @@ export function setup(ctx: SpindleFrontendContext) {
     // Walk until something draws the message; anything that doesn't (shouldn't
     // happen, but e.g. mid re-render) is skipped rather than ending the track.
     for (let i = idx + dir; i >= 0 && i <= last; i += dir) {
-      const lane = laneOwnerOf(track.chatId, i)
+      const lane = drawnAt(track.chatId, i)
       if (!lane) return null
       const c = scope.querySelector(`circle.ctv-node[data-node-chat="${CSS.escape(lane)}"][data-node-idx="${i}"]`) as any
       if (c?._msg) return { el: c, msg: c._msg, node: c._node }
@@ -1263,7 +1370,7 @@ export function setup(ctx: SpindleFrontendContext) {
     pendingExpand = null
     tooltipNavAction = null
     tooltipSwipeAction = null
-    tooltipEditsAction = null
+    tooltipChangesAction = null
     tooltipBranchAction = null
     keyNavActive = false
     deskPin = null
@@ -1279,6 +1386,7 @@ export function setup(ctx: SpindleFrontendContext) {
     hoverAnchorEl = null
     clearBranchHighlight()
     clearNodePeek()
+    clearTrace()
   }
 
   // Hover-bridge: keep the tooltip alive while the pointer is over it (only
@@ -1313,7 +1421,8 @@ export function setup(ctx: SpindleFrontendContext) {
     // Crawl the branch without dismissing — re-anchor the preview to the neighbour.
     // Toggle into the swipe list. showSwipeTooltip rebuilds the tooltip in place, so
     // we don't hide first — the box morphs from preview → swipe view.
-    if (target.closest('.ctv-tooltip-edits')) { tooltipEditsAction?.(); return }
+    const changesBtn = target.closest('.ctv-tooltip-changes') as HTMLElement | null
+    if (changesBtn) { tooltipChangesAction?.(changesBtn); return }
     if (target.closest('.ctv-tooltip-swipes')) { tooltipSwipeAction?.(); return }
     if (target.closest('.ctv-bookmark-btn') && lastMsgTooltip) {
       const { anchorEl, drawnMsg, opts } = lastMsgTooltip
@@ -1372,7 +1481,7 @@ export function setup(ctx: SpindleFrontendContext) {
     pendingExpand = null
     tooltipNavAction = null
     tooltipSwipeAction = null
-    tooltipEditsAction = null
+    tooltipChangesAction = null
     const docked = lastPointerType === 'touch'  // dock the swipe list at the bottom on touch
     tooltip.style.width = docked ? (mobileDockWidth() + 'px') : '330px'
     hoverAnchorEl = anchorEl
@@ -1517,7 +1626,7 @@ export function setup(ctx: SpindleFrontendContext) {
     }
   }
 
-  // ── Edited copies ─────────────────────────────────────────────────────────
+  // ── Word diff ─────────────────────────────────────────────────────────────
   // Word-level diff of `base` → `text` as HTML: words only in `text` are marked
   // added, words only in `base` struck out. A plain LCS over the tokens after
   // trimming the shared start and end — edits are usually small, so what's left
@@ -1558,140 +1667,6 @@ export function setup(ctx: SpindleFrontendContext) {
     return out.join('')
   }
 
-  // A message whose copies differ between branches (one was edited after the
-  // other branched off — which one can't be told apart, so neither is called
-  // the original). Lists every version with the branches that show it: the
-  // one your chat shows first, as "Current version", and the rest with what
-  // differs from it highlighted. Laid out like the swipe list, but these live
-  // in other chats — so the actions jump there rather than select anything.
-  function showEditsTooltip(anchorEl, node, msg) {
-    greetingView = null
-    clearTimeout(hoverExpandTimer); hoverExpandTimer = null
-    clearTimeout(hideTimer); hideTimer = null
-    resetTooltipMorph()
-    tooltip.classList.remove('expanded')
-    tooltip.classList.remove('expandable')
-    tooltip.classList.add('interactive')
-    pendingExpand = null
-    tooltipNavAction = null
-    tooltipSwipeAction = null
-    tooltipEditsAction = null
-    const docked = lastPointerType === 'touch'
-    tooltip.style.width = docked ? (mobileDockWidth() + 'px') : '330px'
-    hoverAnchorEl = anchorEl
-    clearNodePeek()
-    if (docked && (anchorEl as HTMLElement)?.classList?.contains('ctv-node')) {
-      (anchorEl as HTMLElement).classList.add('ctv-node-peek')
-    }
-
-    const label = msg.role === 'user' ? 'User' : msg.role === 'assistant' ? 'AI' : 'System'
-    // Every version: the one this lane draws, then each differing group. `src`
-    // is where its full text can be fetched; texts start as the capped previews
-    // and are swapped for the full text as it arrives.
-    const versions = [
-      {
-        text: msg.preview || '', truncated: !!msg.truncated, lane: true,
-        src: { chatId: node.chatId, messageId: msg.id },
-        dests: [{ chatId: node.chatId, messageId: msg.id, label: branchLabel(node.chatName, node.branchPath) }],
-      },
-      ...(msg.editedIn ?? []).map(g => ({
-        text: g.text || '', truncated: !!g.truncated, lane: false,
-        src: { chatId: g.chats[0].chatId, messageId: g.chats[0].messageId },
-        dests: g.chats.map(c => ({ chatId: c.chatId, messageId: c.messageId, label: branchLabel(c.name, c.branchPath) })),
-      })),
-    ]
-
-    // The version the chat you're in shows: a differing copy if it holds one,
-    // else this lane's when your chat's history runs through this message.
-    let current = versions.findIndex(v => !v.lane && v.dests.some(d => d.chatId === activeChatId))
-    if (current === -1 && activeChatId && (findNodeByChat(activeChatId)?.messages.length ?? 0) > msg.index
-      && laneOwnerOf(activeChatId, msg.index) === node.chatId) current = 0
-    // Yours first; the others are compared against the first row.
-    const order = current > 0 ? [current, ...versions.keys()].filter((k, i, a) => a.indexOf(k) === i) : [...versions.keys()]
-    const rows = order.map(k => versions[k])
-    const titleOf = (v, r) => {
-      if (order[r] === current) return 'Current version'
-      if (v.lane) return `Version in ${escHtml(truncate(v.dests[0].label, 24))}`
-      return `Version in ${v.dests.length} branch${v.dests.length === 1 ? '' : 'es'}`
-    }
-
-    const rowHtml = (v, r) => `
-        <div class="ctv-swipe-row${order[r] === current ? ' active' : ''}">
-          <div class="ctv-swipe-head" title="Click to expand the text">
-            <span class="ctv-swipe-caret"><svg viewBox="0 0 10 10" aria-hidden="true"><path d="M3.5 2.5 L8 5 L3.5 7.5 Z"/></svg></span>
-            <span class="ctv-swipe-num">${titleOf(v, r)}</span>
-            ${copyBtnHtml('Copy this version', ` data-row="${r}"`)}
-          </div>
-          <div class="ctv-swipe-text"></div>
-          <div class="ctv-swipe-actions">${v.dests.map(d =>
-            `<button class="ctv-swipe-act go" data-dest-chat="${escHtml(d.chatId)}" data-dest-msg="${escHtml(d.messageId)}">→ ${escHtml(truncate(d.label, 22))}</button>`).join('')}</div>
-        </div>`
-
-    tooltip.innerHTML = `
-      <div class="ctv-swipe-header">
-        <button type="button" class="ctv-swipe-back" title="Back to message preview">‹ Back</button>
-        <div class="ctv-tooltip-role">${label} · msg ${msg.index + 1} · ✎ ${versions.length} versions</div>
-      </div>
-      <div class="ctv-swipe-list">${rows.map(rowHtml).join('')}</div>
-      <div class="ctv-tooltip-hint">Highlights show how each differs from ${current === -1 ? 'the first' : 'yours'} · → opens that branch</div>
-    `
-    const rowEls = Array.from(tooltip.querySelectorAll('.ctv-swipe-row')) as HTMLElement[]
-    // The first row is plain text; the others show what differs from it.
-    const paint = (r) => {
-      const el = rowEls[r]?.querySelector('.ctv-swipe-text')
-      if (!el) return
-      el.innerHTML = r === 0 ? escHtml(rows[0].text || '(empty)') : diffHtml(rows[0].text, rows[r].text)
-    }
-    rows.forEach((_, r) => paint(r))
-
-    tooltip.querySelector('.ctv-swipe-back')?.addEventListener('click', (e) => {
-      e.stopPropagation()
-      showMsgTooltip(anchorEl, msg, nodeTooltipOpts(anchorEl, node, msg))
-    })
-    tooltip.querySelectorAll('.ctv-swipe-head').forEach(head => {
-      head.addEventListener('click', (e) => {
-        e.stopPropagation()
-        head.closest('.ctv-swipe-row')?.classList.toggle('expanded')
-      })
-    })
-    tooltip.querySelectorAll('.ctv-swipe-head .ctv-copy-btn').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation()   // don't also toggle the row
-        const v = rows[parseInt(btn.getAttribute('data-row') || '0', 10)]
-        if (v) copyMessageText(btn, v.src.chatId, { id: v.src.messageId, preview: v.text, truncated: v.truncated })
-      })
-    })
-    tooltip.querySelectorAll('.ctv-swipe-act').forEach(btn => {
-      const destChat = btn.getAttribute('data-dest-chat')
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation()
-        hideMsgTooltip()
-        navigateToMessage(destChat, btn.getAttribute('data-dest-msg'), msg.index)
-      })
-      // Same preview glow as the swipe list: the branch the button leads to
-      // (this node itself, for this lane's own version).
-      const hl = (on) => destChat === node.chatId ? anchorEl.classList.toggle('ctv-branch-hl', on) : setBranchHighlight(destChat, on)
-      btn.addEventListener('mouseenter', () => hl(true))
-      btn.addEventListener('mouseleave', () => hl(false))
-    })
-
-    tooltip.style.display = 'block'
-    tooltip.querySelectorAll('.ctv-swipe-actions').forEach(packActionRows)
-    positionTooltip(anchorEl, docked, false)
-
-    // Capped texts: compare the whole messages, not just their first part. Ignored
-    // once this list has been replaced (its rows are no longer in the tooltip).
-    const stillOpen = () => hoverAnchorEl === anchorEl && !!rowEls[0]?.isConnected
-    rows.forEach((v, r) => {
-      if (!v.truncated) return
-      requestFullText(v.src.chatId, v.src.messageId, (entry) => {
-        if (!stillOpen() || !entry.content) return
-        v.text = entry.content
-        if (r === 0) rows.forEach((_, j) => paint(j)); else paint(r)
-      })
-    })
-  }
-
   // ── Greetings list ────────────────────────────────────────────────────────
   // The character card's greetings, fetched once per character (same-origin,
   // no extra permission). Null if it can't be read — the list then shows only
@@ -1724,7 +1699,7 @@ export function setup(ctx: SpindleFrontendContext) {
     pendingExpand = null
     tooltipNavAction = null
     tooltipSwipeAction = null
-    tooltipEditsAction = null
+    tooltipChangesAction = null
     const docked = lastPointerType === 'touch'
     tooltip.style.width = docked ? (mobileDockWidth() + 'px') : '330px'
     hoverAnchorEl = anchorEl
@@ -2096,15 +2071,15 @@ export function setup(ctx: SpindleFrontendContext) {
     let r = 0
     const walk = (n) => { rank.set(n.chatId, r++); n.children.forEach(walk) }
     roots.forEach(walk)
-    // Branches sharing one differing version each report it; list it once.
+    // Branches sharing one side node's version each report it; list it once.
     const byVersion = new Map<string, any>()
     const placed = hits.map(h => {
-      const lane = laneOwnerOf(h.chatId, h.index) ?? h.chatId
+      // A branch's own version of an old message is on its side node.
+      const lane = drawnAt(h.chatId, h.index) ?? h.chatId
       const treeIdx = roots.findIndex(rt => treeContainsChat(rt, lane))
-      return { ...h, lane, treeIdx, key: `${lane}:${h.index}`, otherVersion: lane !== h.chatId && search.scope !== 'path', chatIds: [h.chatId] }
+      return { ...h, lane, treeIdx, key: `${lane}:${h.index}`, chatIds: [h.chatId] }
     }).filter(h => {
       if (h.treeIdx === -1) return false
-      if (!h.otherVersion) return true
       const same = byVersion.get(`${h.key}\u0000${h.snippet}`)
       if (same) { same.chatIds.push(h.chatId); return false }
       byVersion.set(`${h.key}\u0000${h.snippet}`, h)
@@ -2190,17 +2165,14 @@ export function setup(ctx: SpindleFrontendContext) {
   }
 
   // Under the preview text: where else the search matched in this message —
-  // other swipes, and other branches' versions (but not `shownChats`', the
-  // version the preview is already showing).
-  function searchNoteFor(anchorEl, msg, shownChats: string[] = []) {
+  // its other swipes. (Other branches' versions have their own side nodes.)
+  function searchNoteFor(anchorEl, msg) {
     const lane = (anchorEl as HTMLElement)?.dataset?.nodeChat
     const hits = lane ? search.hitKeys.get(`${lane}:${msg.index}`) : null
     if (!search.open || !hits?.length) return ''
     const notes: string[] = []
     const sw = [...new Set(hits.flatMap(h => h.swipes ?? []))].sort((a, b) => a - b)
     if (sw.length) notes.push(`swipe${sw.length > 1 ? 's' : ''} ${sw.map(i => i + 1).join(', ')}`)
-    const others = hits.filter(h => h.otherVersion && !h.chatIds.some(c => shownChats.includes(c))).flatMap(h => h.chatIds.map(chatLabel))
-    if (others.length) notes.push(`the version in ${others.join(', ')}`)
     return notes.length ? `<div class="ctv-tooltip-meta" style="color:#ffd666">⌕ Also matches in ${escHtml(notes.join(' and '))}</div>` : ''
   }
 
@@ -2297,7 +2269,7 @@ export function setup(ctx: SpindleFrontendContext) {
         else list.innerHTML = search.hits.slice(0, LIST_MAX).map((h, k) => {
           const where = [
             roots.length > 1 ? `Tree ${h.treeIdx + 1}` : '',
-            (h.otherVersion ? 'version in ' : '') + h.chatIds.map(chatLabel).join(', '),
+            h.chatIds.map(chatLabel).join(', '),
             `msg ${h.index + 1}`,
             h.role === 'user' ? 'You' : h.role === 'assistant' ? 'AI' : 'System',
             !h.active && h.swipes?.length ? `swipe ${h.swipes[0] + 1}` : '',
@@ -2373,7 +2345,7 @@ export function setup(ctx: SpindleFrontendContext) {
     if (!node) return null
     const index = node.messages[b.index]?.id === b.messageId ? b.index : node.messages.findIndex(m => m.id === b.messageId)
     if (index === -1) return null
-    const lane = laneOwnerOf(b.chatId, index) ?? b.chatId
+    const lane = drawnAt(b.chatId, index) ?? b.chatId
     return { lane, index, key: `${lane}:${index}`, treeIdx: roots.findIndex(r => treeContainsChat(r, lane)) }
   }
 
@@ -2540,7 +2512,7 @@ export function setup(ctx: SpindleFrontendContext) {
         return
       }
       list.innerHTML = rows.map(({ b, at }) => {
-        const msg = at ? findNodeByChat(at.lane)?.messages[at.index] : null
+        const msg = at ? findNodeByChat(laneOwnerOf(b.chatId, at.index))?.messages[at.index] : null
         // The text this bookmark's chat shows there — its own version if it differs.
         const version = msg?.editedIn?.find(g => g.chats.some(c => c.chatId === b.chatId))
         const text = (version?.text ?? msg?.preview ?? '').replace(/\s+/g, ' ').trim()
@@ -2766,6 +2738,12 @@ export function setup(ctx: SpindleFrontendContext) {
         const off = uniqueMsgs.findIndex(m => m.index === fp)
         if (off !== -1) importantOffsets.add(off)
       }
+
+      // Messages with side nodes keep their own slot, and so do their neighbours
+      // (where the detour leaves the lane and comes back).
+      uniqueMsgs.forEach((m, off) => {
+        if (m.editedIn?.length) for (const o of [off - 1, off, off + 1]) if (o >= 0 && o < N) importantOffsets.add(o)
+      })
 
       const sortedImportant = [...importantOffsets].sort((a, b) => a - b)
       const localSlotMap = new Map()
@@ -3162,6 +3140,27 @@ export function setup(ctx: SpindleFrontendContext) {
     // retractEls: [el, length] pairs — ghost track extensions that retract (dasharray shrink) on collapse.
     const slideEls = [], fadeinEls = [], retractEls = []
 
+    // ── Differing versions: plan the side nodes ──────────────────────────────
+    // (see drawnAt). Each distinct version of a message is drawn once, in the
+    // left-most column of the branches holding it. Planned here, drawn after the
+    // lanes, because the lanes need to know where your chat takes a side node:
+    // its highlight skips the lane's version there.
+    const sideNodes: any[] = []                   // { owner: lb, rep: lb, msg, group, chats }
+    const activeDetourAt = new Set<string>()      // `${ownerChatId}:${index}` where your chat takes a side node
+    for (const lb of allBranches) {
+      const firstOwn = lb.node.parentId === null ? 0 : (lb.node.forkAtIndex ?? 0) + 1
+      for (const m of lb.node.messages) {
+        if (m.index < firstOwn) continue
+        for (const g of m.editedIn ?? []) {
+          const repLb = branchByChat.get(versionRep(g))
+          if (!repLb) continue
+          const chats = g.chats.map(c => c.chatId)
+          if (activeChatId && chats.includes(activeChatId)) activeDetourAt.add(`${lb.node.chatId}:${m.index}`)
+          sideNodes.push({ owner: lb, rep: repLb, msg: m, group: g, chats })
+        }
+      }
+    }
+
     for (const lb of allBranches) {
       const { node, lane, color } = lb
       const bc = bp(lane)
@@ -3249,15 +3248,25 @@ export function setup(ctx: SpindleFrontendContext) {
             : Math.min(ancestorRange.maxIdx, uniqueMsgs[uniqueMsgs.length - 1].index)
           // Only draw if the end is at or after the start (guards against any
           // remaining inverted-range edge cases producing a backwards line).
-          if (coreEndIdx >= uniqueMsgs[0].index) {
-            const coreTo = nc(bc, mpForBranch(node.chatId, coreEndIdx))
+          // Broken around messages where your chat takes a side node instead: the
+          // glow leaves the lane just before and comes back just after.
+          let segStart = uniqueMsgs[0].index
+          const drawCore = (a, b) => {
+            if (b <= a) return
+            const p1 = nc(bc, mpForBranch(node.chatId, a)), p2 = nc(bc, mpForBranch(node.chatId, b))
             const core = document.createElementNS(svgNS, 'line')
-            core.setAttribute('x1', String(from.x)); core.setAttribute('y1', String(from.y))
-            core.setAttribute('x2', String(coreTo.x)); core.setAttribute('y2', String(coreTo.y))
+            core.setAttribute('x1', String(p1.x)); core.setAttribute('y1', String(p1.y))
+            core.setAttribute('x2', String(p2.x)); core.setAttribute('y2', String(p2.y))
             core.classList.add('ctv-track-core')
             svg.appendChild(core)
             if (branchSlide) slideEls.push(core)
           }
+          for (const m of uniqueMsgs) {
+            if (m.index > coreEndIdx || !activeDetourAt.has(`${node.chatId}:${m.index}`)) continue
+            drawCore(segStart, Math.min(m.index - 1, coreEndIdx))
+            segStart = Math.max(segStart, m.index + 1)
+          }
+          drawCore(segStart, coreEndIdx)
         }
 
         // ── Collapse ghost extension ──────────────────────────────────────────
@@ -3290,7 +3299,10 @@ export function setup(ctx: SpindleFrontendContext) {
         const parentLb = visualParentLb(node, forkRow)
         if (parentLb) {
           const forkAxisPos = mpForBranch(parentLb.node.chatId, forkRow)
-          const A = nc(bp(parentLb.lane), forkAxisPos)
+          // Split off at a message this branch holds in a different version: the
+          // line leaves from that version's side node, not the lane's.
+          const fromLb = branchByChat.get(drawnAt(node.chatId, forkRow)) ?? parentLb
+          const A = nc(bp(fromLb.lane), forkAxisPos)
           const B = nc(bc, forkAxisPos)
           const C = nc(bc, mpForBranch(node.chatId, uniqueMsgs[0].index))
           const connector = document.createElementNS(svgNS, 'path')
@@ -3304,7 +3316,10 @@ export function setup(ctx: SpindleFrontendContext) {
           // Glowing dashed overlay for connectors on the active path.
           if (isOnActivePath) {
             const connectorCore = document.createElementNS(svgNS, 'path')
-            connectorCore.setAttribute('d', `M ${A.x} ${A.y} L ${B.x} ${B.y} L ${C.x} ${C.y}`)
+            // Your chat detours at this branch's first message: the glow turns off
+            // toward the side node at the corner instead of running down to it.
+            const headDetour = activeDetourAt.has(`${node.chatId}:${uniqueMsgs[0].index}`)
+            connectorCore.setAttribute('d', headDetour ? `M ${A.x} ${A.y} L ${B.x} ${B.y}` : `M ${A.x} ${A.y} L ${B.x} ${B.y} L ${C.x} ${C.y}`)
             connectorCore.classList.add('ctv-connector-core')
             connectorLayer.appendChild(connectorCore)
             if (branchSlide) slideEls.push(connectorCore)
@@ -3443,9 +3458,6 @@ export function setup(ctx: SpindleFrontendContext) {
           pillLabel.textContent = String(seg.msgs.length)
 
           const first = seg.msgs[0], last = seg.msgs[seg.msgs.length - 1]
-          const editedInPill = seg.msgs.filter(m => m.editedIn?.length).length
-          const editedNote = editedInPill
-            ? `<div class="ctv-tooltip-meta" style="color:#f5b84d">✎ ${editedInPill} with different versions in other branches</div>` : ''
           const tsFirst = first.timestamp ? new Date(first.timestamp * 1000).toLocaleString(undefined, { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }) : ''
           const tsLast  = last.timestamp  ? new Date(last.timestamp  * 1000).toLocaleString(undefined, { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }) : ''
           const doExpandPill = () => {
@@ -3464,7 +3476,6 @@ export function setup(ctx: SpindleFrontendContext) {
             showSimpleTooltip(pill, `
               <div class="ctv-tooltip-role">${seg.msgs.length} messages</div>
               ${tsFirst ? `<div class="ctv-tooltip-meta">${tsFirst} → ${tsLast}</div>` : ''}
-              ${editedNote}
               <div class="ctv-tooltip-hint">Click to expand</div>
             `)
           })
@@ -3478,7 +3489,6 @@ export function setup(ctx: SpindleFrontendContext) {
             longPress: () => showSimpleTooltip(pill, `
               <div class="ctv-tooltip-role">${seg.msgs.length} messages</div>
               ${tsFirst ? `<div class="ctv-tooltip-meta">${tsFirst} → ${tsLast}</div>` : ''}
-              ${editedNote}
               <div class="ctv-tooltip-hint">Tap the pill to expand</div>
             `),
           })
@@ -3498,13 +3508,6 @@ export function setup(ctx: SpindleFrontendContext) {
           svg.appendChild(pill)
           svg.appendChild(pillLabel)
           const pillEls: Element[] = [pill, pillLabel]
-          // A collapsed message edited in another branch badges the pill's corner.
-          if (editedInPill) {
-            const corner = orientation === 'vertical' ? nc(bc + PCROSS / 2 - 3, pStart + 3) : nc(bc - PCROSS / 2 + 3, pStart + pLen - 3)
-            const badge = editBadge(corner.x, corner.y, 0)
-            svg.appendChild(badge)
-            pillEls.push(badge)
-          }
           // Tag pills for animation.
           if (branchSlide) slideEls.push(...pillEls)
           else if (isCollapsedBranch) {
@@ -3523,8 +3526,13 @@ export function setup(ctx: SpindleFrontendContext) {
           const isForkPoint = node.children.some(c => c.forkAtIndex === msg.index)
           const r = isForkPoint ? FORK_R : NODE_R
 
+          // Your chat holds a different version here (its own side node).
+          const youDetour = activeDetourAt.has(`${node.chatId}:${msg.index}`)
+
           // Capture position for the active-message cursor.
-          if (msg.id && activeMsgIdSet.has(msg.id)) {
+          if (youDetour) {
+            // The side node captures it instead.
+          } else if (msg.id && activeMsgIdSet.has(msg.id)) {
             // Active branch's own unique messages — captured directly by ID.
             capturedMsgPositions.set(msg.id, { x: pt.x, y: pt.y, r })
           } else if (msg.id && ancestorRange && msg.index >= ancestorRange.minIdx && msg.index <= ancestorRange.maxIdx) {
@@ -3536,7 +3544,7 @@ export function setup(ctx: SpindleFrontendContext) {
 
           // Nodes on the active path glow at full opacity; beyond the fork point on
           // an ancestor branch they stay dim since that's a divergent history.
-          const isActiveNode = isActiveBranch || (ancestorRange !== null && msg.index <= ancestorRange.maxIdx)
+          const isActiveNode = !youDetour && (isActiveBranch || (ancestorRange !== null && msg.index <= ancestorRange.maxIdx))
 
           const circle = document.createElementNS(svgNS, 'circle')
           circle.setAttribute('cx', String(pt.x)); circle.setAttribute('cy', String(pt.y))
@@ -3595,20 +3603,101 @@ export function setup(ctx: SpindleFrontendContext) {
               else if (msgAxis > animPill.pivotCoord) fadeinEls.push(dot)
             } else if (isCollapsedBranch && msgAxis > animPill.pivotCoord) slideEls.push(dot)
           }
-
-          // Branches differ on this message: an amber badge on the node's corner (the
-          // centre is taken by the swipe dot).
-          if (msg.editedIn?.length) {
-            const badge = editBadge(pt.x, pt.y, r)
-            svg.appendChild(badge)
-            if (branchSlide) slideEls.push(badge)
-            else if (isExpandedBranch) {
-              if (msgAxis > animPill.pivotCoord + animPill.delta) slideEls.push(badge)
-              else if (msgAxis > animPill.pivotCoord) fadeinEls.push(badge)
-            } else if (isCollapsedBranch && msgAxis > animPill.pivotCoord) slideEls.push(badge)
-          }
         }
       }
+    }
+
+    // ── Differing versions: draw the side nodes ──────────────────────────────
+    // The dashed lines are the steps each holder's history actually takes from
+    // one message to the next wherever a side node is involved: out from the
+    // lane to a side node (across at the row before, then down), back again
+    // (down, then across at the row after), or on down a column. Steps several
+    // holders share are drawn once. Leaving the lane for good is the holder's
+    // own fork line, which starts from whichever node it split off at.
+    const P = (b, m) => { const q = nc(b, m); return `${q.x} ${q.y}` }
+    for (const owner of new Set(sideNodes.map(sn => sn.owner))) {
+      const ownerId = owner.node.chatId, laneX = bp(owner.lane)
+      const firstOwn = owner.node.parentId === null ? 0 : (owner.node.forkAtIndex ?? 0) + 1
+      const pos = (i) => mpForBranch(ownerId, i)
+      const holders = new Set(sideNodes.filter(sn => sn.owner === owner).flatMap(sn => sn.chats))
+      const steps = new Map<string, { d: string; color: string; chats: string[] }>()
+      for (const c of holders) {
+        const n = findNodeByChat(c)
+        if (!n) continue
+        let prev: any = null
+        for (let i = firstOwn; i < n.messages.length && laneOwnerOf(c, i) === ownerId; i++) {
+          const sideId = drawnAt(c, i)
+          const side = sideId !== ownerId ? branchByChat.get(sideId) ?? null : null
+          const cur = { x: side ? bp(side.lane) : laneX, m: pos(i), side }
+          // Arriving at the lane's first message on a side node: out from the
+          // corner where the lane's own fork line turns down.
+          const from = prev ?? (side ? { x: laneX, m: pos(i) - NODE_H, side: null } : null)
+          prev = cur
+          if (!from || (!from.side && !side)) continue
+          const d = from.x === cur.x ? `M ${P(from.x, from.m)} L ${P(cur.x, cur.m)}`
+            : from.side && !side ? `M ${P(from.x, from.m)} L ${P(from.x, cur.m)} L ${P(cur.x, cur.m)}`
+            : `M ${P(from.x, from.m)} L ${P(cur.x, from.m)} L ${P(cur.x, cur.m)}`
+          const step = steps.get(d) ?? { d, color: (side ?? from.side).color, chats: [] }
+          step.chats.push(c)
+          steps.set(d, step)
+        }
+      }
+      for (const step of steps.values()) {
+        const path = document.createElementNS(svgNS, 'path')
+        path.setAttribute('d', step.d)
+        path.setAttribute('stroke', step.color)
+        path.classList.add('ctv-connector', 'ctv-version-path')
+        ;(path as any)._chats = step.chats
+        connectorLayer.appendChild(path)
+        if (activeChatId && step.chats.includes(activeChatId)) {
+          const core = document.createElementNS(svgNS, 'path')
+          core.setAttribute('d', step.d)
+          core.classList.add('ctv-connector-core')
+          connectorLayer.appendChild(core)
+        }
+      }
+    }
+
+    for (const { owner, rep, msg, group, chats } of sideNodes) {
+      const k = msg.index, repNode = rep.node
+      const pt = nc(bp(rep.lane), mpForBranch(owner.node.chatId, k))
+      const repCopy = repNode.messages[k]
+      const vmsg = {
+        id: repCopy?.id ?? msg.id, index: k, role: msg.role, preview: group.text, truncated: group.truncated,
+        timestamp: msg.timestamp, swipeCount: 1, swipeId: repCopy?.swipeId ?? 0,
+      }
+      const v = {
+        index: k, rep: repNode.chatId, chats, color: rep.color,
+        base: { id: msg.id, chatId: owner.node.chatId, preview: msg.preview, truncated: msg.truncated },
+      }
+      const youHere = !!activeChatId && chats.includes(activeChatId)
+      if (youHere) {
+        const activeId = activeChatMsgIdByIndex.get(k)
+        if (activeId) capturedMsgPositions.set(activeId, { x: pt.x, y: pt.y, r: NODE_R })
+      }
+      const circle = document.createElementNS(svgNS, 'circle')
+      circle.setAttribute('cx', String(pt.x)); circle.setAttribute('cy', String(pt.y))
+      circle.setAttribute('r', String(NODE_R))
+      circle.setAttribute('fill', msg.role === 'user' ? shade(rep.color, 0.6) : rep.color)
+      circle.setAttribute('opacity', youHere ? '1' : '0.65')
+      circle.classList.add('ctv-node', 'ctv-version')
+      circle.dataset.nodeChat = repNode.chatId
+      circle.dataset.nodeIdx = String(k)
+      ;(circle as any)._msg = vmsg
+      ;(circle as any)._node = repNode
+      ;(circle as any)._version = v
+      circle.addEventListener('mouseenter', () => {
+        if (performance.now() < suppressNodeHoverUntil) return
+        showMsgTooltip(circle, vmsg, nodeTooltipOpts(circle, repNode, vmsg))
+        traceChats(svg, chats)
+      })
+      circle.addEventListener('mouseleave', () => { clearTrace(); scheduleHideTooltip() })
+      circle.addEventListener('click', () => {
+        if (lastPointerType === 'touch') return
+        hideMsgTooltip()
+        versionTooltipOpts(v).onNavigate()
+      })
+      svg.appendChild(circle)
     }
 
     svg.dataset.orientation = orientation
@@ -3838,10 +3927,6 @@ export function setup(ctx: SpindleFrontendContext) {
     key.innerHTML = `
       <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><circle cx="5" cy="5" r="4" fill="currentColor"/></svg><span>AI</span>
       <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><circle cx="5" cy="5" r="4" fill="currentColor" fill-opacity="0.45"/></svg><span>You</span>`
-    if (allBranches.some(lb => lb.node.messages.some(m => m.editedIn?.length))) {
-      key.title += ' · amber corner: branches have different versions of this message'
-      key.insertAdjacentHTML('beforeend', `<svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><circle cx="5" cy="5" r="3.2" fill="#f5b84d"/></svg><span>Differs</span>`)
-    }
     target.appendChild(key)
     for (const el of staticEls) target.appendChild(el)
   }
@@ -4944,17 +5029,6 @@ export function setup(ctx: SpindleFrontendContext) {
     const g = Math.round(((n >> 8) & 255) * f)
     const b = Math.round((n & 255) * f)
     return `rgb(${r},${g},${b})`
-  }
-
-  // Amber corner badge: a message edited in another branch. `r` is the node's
-  // radius — the badge sits on its upper-right edge (0: x/y is the spot itself).
-  function editBadge(x, y, r) {
-    const badge = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
-    const off = r * 0.8
-    badge.setAttribute('cx', String(x + off)); badge.setAttribute('cy', String(y - off))
-    badge.setAttribute('r', '3.2')
-    badge.classList.add('ctv-edit-badge')
-    return badge
   }
 
   function truncate(s, n) {
