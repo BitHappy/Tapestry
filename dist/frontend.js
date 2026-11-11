@@ -191,10 +191,10 @@ function setup(ctx) {
     .ctv-tooltip-swipes:active { transform:scale(0.97); }
     /* A side node's "Changes" toggle, lit while the changes are shown. */
     .ctv-tooltip-swipes.ctv-tooltip-changes.on { background:var(--lumiverse-primary-040,#6b63c0); color:#fff; }
-    /* Hovering a side node traces the branches that hold its version — a softer
-       take on the white glow of your own path. */
-    .ctv-node.ctv-trace, .ctv-pill.ctv-trace { stroke:rgba(255,255,255,0.8); stroke-width:2.2; filter:drop-shadow(0 0 4px rgba(255,255,255,0.6)); }
-    path.ctv-version-path.ctv-trace { opacity:1; stroke-width:2; }
+    /* Hovering a side node traces the routes of the branches that hold its
+       version in gold — like the white glow of your own path. */
+    .ctv-trace-layer, .ctv-trace-layer * { pointer-events:none; }
+    .ctv-trace-path { fill:none; stroke:#ffd27a; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; filter:drop-shadow(0 0 4px rgba(255,210,122,0.9)) drop-shadow(0 0 8px rgba(255,210,122,0.45)); }
     .ctv-diff-add { background:rgba(91,201,142,0.24); color:inherit; text-decoration:none; border-radius:3px; }
     /* ── Bookmarks ── */
     .ctv-bookmark-ribbon { fill:#ff8fab; stroke:var(--lumiverse-bg,#13111c); stroke-width:0.8; pointer-events:none; }
@@ -1026,25 +1026,39 @@ function setup(ctx) {
   }
   function traceChats(svg, chatIds) {
     clearTrace();
+    const routeOf = svg._tracePath;
+    if (!routeOf)
+      return;
+    const svgNS = "http://www.w3.org/2000/svg";
+    const layer = document.createElementNS(svgNS, "g");
+    layer.classList.add("ctv-trace-layer");
+    for (const cid of chatIds) {
+      const d = routeOf(cid);
+      if (!d)
+        continue;
+      const path = document.createElementNS(svgNS, "path");
+      path.setAttribute("d", d);
+      path.classList.add("ctv-trace-path");
+      layer.appendChild(path);
+    }
+    const copied = new Set;
     for (const cid of chatIds) {
       const n = findNodeByChat(cid);
-      if (!n)
-        continue;
-      for (let i = 0;i < n.messages.length; i++) {
+      for (let i = 0;i < (n?.messages.length ?? 0); i++) {
         const lane = drawnAt(cid, i);
         if (!lane)
           continue;
         const el = svg.querySelector(`circle.ctv-node[data-node-chat="${CSS.escape(lane)}"][data-node-idx="${i}"]`) ?? Array.from(svg.querySelectorAll(`.ctv-pill[data-pill-chat="${CSS.escape(lane)}"]`)).find((p) => (p._pillMsgs ?? []).some((m) => m.index === i));
-        el?.classList.add("ctv-trace");
+        if (!el || copied.has(el))
+          continue;
+        copied.add(el);
+        layer.appendChild(el.cloneNode(false));
       }
     }
-    svg.querySelectorAll(".ctv-version-path").forEach((p) => {
-      if ((p._chats ?? []).some((c) => chatIds.includes(c)))
-        p.classList.add("ctv-trace");
-    });
+    svg.appendChild(layer);
   }
   function clearTrace() {
-    document.querySelectorAll(".ctv-trace").forEach((el) => el.classList.remove("ctv-trace"));
+    document.querySelectorAll(".ctv-trace-layer").forEach((el) => el.remove());
   }
   function laneOwnerOf(chatId, index) {
     let n = findNodeByChat(chatId);
@@ -2133,8 +2147,8 @@ function setup(ctx) {
       return;
     const horizontal = svg.dataset.orientation === "horizontal";
     const place = (ref, cx, cy, r) => {
-      const x = horizontal ? cx - 3 : cx - r - 9;
-      const y = horizontal ? cy - r - 11 : cy - 5;
+      const x = horizontal ? cx - 3 : cx + r + 3;
+      const y = horizontal ? cy + r + 2 : cy - 5;
       const rib = document.createElementNS("http://www.w3.org/2000/svg", "path");
       rib.setAttribute("d", `M ${x} ${y} h 6 v 9 l -3 -2.4 l -3 2.4 z`);
       rib.classList.add("ctv-bookmark-ribbon");
@@ -2661,6 +2675,39 @@ function setup(ctx) {
     const svgW = orientation === "vertical" ? PAD.left + (totalLanes - 1) * fittedStep + PAD.right + NODE_R * 2 : PAD.left + totalMsgAxisSlots * NODE_H + PAD.right + NODE_R * 2;
     const svgH = orientation === "vertical" ? PAD.top + totalMsgAxisSlots * NODE_H + PAD.bottom + NODE_R * 2 : PAD.top + (totalLanes - 1) * fittedStep + PAD.bottom + NODE_R * 2;
     const branchByChat = new Map(allBranches.map((lb) => [lb.node.chatId, lb]));
+    const P = (b, m) => {
+      const q = nc(b, m);
+      return `${q.x} ${q.y}`;
+    };
+    const crossAt = (fromM, toM) => fromM + Math.max(0, Math.min(NODE_H, toM - fromM)) / 2;
+    function sCurve(fb, fm, tb, tm, cross = crossAt(fm, tm), stopAtCross = false) {
+      if (fb === tb)
+        return ` L ${P(tb, tm)}`;
+      const dir = Math.sign(tb - fb), half = Math.abs(tb - fb) / 2;
+      const r1 = Math.max(0, Math.min(NODE_H / 2, half, cross - fm));
+      const r2 = Math.max(0, Math.min(NODE_H / 2, half, tm - cross));
+      const d = ` L ${P(fb, cross - r1)} Q ${P(fb, cross)} ${P(fb + dir * r1, cross)}`;
+      if (stopAtCross)
+        return d + ` L ${P(tb, cross)}`;
+      return d + ` L ${P(tb - dir * r2, cross)} Q ${P(tb, cross)} ${P(tb, cross + r2)} L ${P(tb, tm)}`;
+    }
+    const sPath = (fb, fm, tb, tm, cross, stopAtCross = false) => `M ${P(fb, fm)}` + sCurve(fb, fm, tb, tm, cross ?? crossAt(fm, tm), stopAtCross);
+    const tracePath = (cid) => {
+      const n = findNodeByChat(cid);
+      const pts = [];
+      for (let i = 0;i < (n?.messages.length ?? 0); i++) {
+        const owner = laneOwnerOf(cid, i);
+        const lb = owner ? branchByChat.get(drawnAt(cid, i) ?? owner) : null;
+        if (lb)
+          pts.push({ b: bp(lb.lane), m: mpForBranch(owner, i) });
+      }
+      if (!pts.length)
+        return "";
+      let d = `M ${P(pts[0].b, pts[0].m)}`;
+      for (let k = 1;k < pts.length; k++)
+        d += sCurve(pts[k - 1].b, pts[k - 1].m, pts[k].b, pts[k].m);
+      return d;
+    };
     function visualParentLb(childNode, forkRow) {
       let parentId = childNode.parentId;
       while (parentId) {
@@ -2737,6 +2784,7 @@ function setup(ctx) {
     }
     const svgNS = "http://www.w3.org/2000/svg";
     const svg = document.createElementNS(svgNS, "svg");
+    svg._tracePath = tracePath;
     svg.setAttribute("viewBox", `0 0 ${svgW} ${svgH}`);
     svg.setAttribute("width", String(Math.round(svgW * zoom)));
     svg.setAttribute("height", String(Math.round(svgH * zoom)));
@@ -2779,11 +2827,9 @@ function setup(ctx) {
           const parentLb = visualParentLb(node, forkRow);
           if (parentLb) {
             const forkAxisPos = mpForBranch(parentLb.node.chatId, forkRow);
-            const A = nc(bp(parentLb.lane), forkAxisPos);
-            const B = nc(bc, forkAxisPos);
             const C = nc(bc, forkAxisPos + NODE_H);
             const conn = document.createElementNS(svgNS, "path");
-            conn.setAttribute("d", `M ${A.x} ${A.y} L ${B.x} ${B.y} L ${C.x} ${C.y}`);
+            conn.setAttribute("d", sPath(bp(parentLb.lane), forkAxisPos, bc, forkAxisPos + NODE_H));
             conn.setAttribute("stroke", color);
             conn.classList.add("ctv-connector");
             connectorLayer.appendChild(conn);
@@ -2885,11 +2931,9 @@ function setup(ctx) {
         if (parentLb) {
           const forkAxisPos = mpForBranch(parentLb.node.chatId, forkRow);
           const fromLb = branchByChat.get(drawnAt(node.chatId, forkRow)) ?? parentLb;
-          const A = nc(bp(fromLb.lane), forkAxisPos);
-          const B = nc(bc, forkAxisPos);
-          const C = nc(bc, mpForBranch(node.chatId, uniqueMsgs[0].index));
+          const fb = bp(fromLb.lane), firstM = mpForBranch(node.chatId, uniqueMsgs[0].index);
           const connector = document.createElementNS(svgNS, "path");
-          connector.setAttribute("d", `M ${A.x} ${A.y} L ${B.x} ${B.y} L ${C.x} ${C.y}`);
+          connector.setAttribute("d", sPath(fb, forkAxisPos, bc, firstM));
           connector.setAttribute("stroke", color);
           connector.classList.add("ctv-connector");
           connector.dataset.chat = node.chatId;
@@ -2899,7 +2943,7 @@ function setup(ctx) {
           if (isOnActivePath) {
             const connectorCore = document.createElementNS(svgNS, "path");
             const headDetour = activeDetourAt.has(`${node.chatId}:${uniqueMsgs[0].index}`);
-            connectorCore.setAttribute("d", headDetour ? `M ${A.x} ${A.y} L ${B.x} ${B.y}` : `M ${A.x} ${A.y} L ${B.x} ${B.y} L ${C.x} ${C.y}`);
+            connectorCore.setAttribute("d", sPath(fb, forkAxisPos, bc, firstM, undefined, headDetour));
             connectorCore.classList.add("ctv-connector-core");
             connectorLayer.appendChild(connectorCore);
             if (branchSlide)
@@ -3183,10 +3227,6 @@ function setup(ctx) {
         }
       }
     }
-    const P = (b, m) => {
-      const q = nc(b, m);
-      return `${q.x} ${q.y}`;
-    };
     for (const owner of new Set(sideNodes.map((sn) => sn.owner))) {
       const ownerId = owner.node.chatId, laneX = bp(owner.lane);
       const firstOwn = owner.node.parentId === null ? 0 : (owner.node.forkAtIndex ?? 0) + 1;
@@ -3202,11 +3242,11 @@ function setup(ctx) {
           const sideId = drawnAt(c, i);
           const side = sideId !== ownerId ? branchByChat.get(sideId) ?? null : null;
           const cur = { x: side ? bp(side.lane) : laneX, m: pos(i), side };
-          const from = prev ?? (side ? { x: laneX, m: pos(i) - NODE_H, side: null } : null);
+          const from = prev ?? (side ? { x: laneX, m: pos(i) - NODE_H / 2, side: null, entry: true } : null);
           prev = cur;
           if (!from || !from.side && !side)
             continue;
-          const d = from.x === cur.x ? `M ${P(from.x, from.m)} L ${P(cur.x, cur.m)}` : from.side && !side ? `M ${P(from.x, from.m)} L ${P(from.x, cur.m)} L ${P(cur.x, cur.m)}` : `M ${P(from.x, from.m)} L ${P(cur.x, from.m)} L ${P(cur.x, cur.m)}`;
+          const d = sPath(from.x, from.m, cur.x, cur.m, from.entry ? from.m : undefined);
           const step = steps.get(d) ?? { d, color: (side ?? from.side).color, chats: [] };
           step.chats.push(c);
           steps.set(d, step);
